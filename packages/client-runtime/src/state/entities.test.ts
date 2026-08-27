@@ -225,6 +225,10 @@ describe("environment entity projections", () => {
     const environmentRefs = harness.registry.get(
       harness.threadShells.environmentThreadRefsAtom(ENVIRONMENT_ID),
     );
+    const projectThreadsAtom = harness.threadShells.threadShellsForProjectRefsAtom([
+      { environmentId: ENVIRONMENT_ID, projectId: PROJECT_ID },
+    ]);
+    const projectThreads = harness.registry.get(projectThreadsAtom);
 
     harness.registry.set(
       harness.connectionStateAtom(ENVIRONMENT_ID),
@@ -238,6 +242,7 @@ describe("environment entity projections", () => {
       }),
     );
     expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual(environmentRefs);
+    expect(harness.registry.get(projectThreadsAtom)).toBe(projectThreads);
 
     const unavailable = {
       desired: true,
@@ -255,6 +260,7 @@ describe("environment entity projections", () => {
     );
 
     expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual([]);
+    expect(harness.registry.get(projectThreadsAtom)).toEqual([]);
     expect(
       harness.registry.get(harness.threadShells.environmentThreadRefsAtom(ENVIRONMENT_ID)),
     ).toBe(environmentRefs);
@@ -271,6 +277,7 @@ describe("environment entity projections", () => {
     );
 
     expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual([]);
+    expect(harness.registry.get(projectThreadsAtom)).toEqual([]);
 
     harness.registry.set(
       harness.connectionStateAtom(ENVIRONMENT_ID),
@@ -284,6 +291,7 @@ describe("environment entity projections", () => {
     );
 
     expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual(environmentRefs);
+    expect(harness.registry.get(projectThreadsAtom)).toEqual(projectThreads);
   });
 
   it("composes detail collections with authoritative shell workspace metadata", () => {

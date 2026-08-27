@@ -72,6 +72,20 @@ export function createEnvironmentThreadShellAtoms<E>(input: {
     }).pipe(Atom.withLabel(`environment-thread-refs:${environmentId}`));
   });
 
+  const environmentThreadsVisibleAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const connection = Option.getOrElse(
+        AsyncResult.value(get(input.connectionStateAtom(environmentId))),
+        () => AVAILABLE_CONNECTION_STATE,
+      );
+      const isInitialConnection =
+        connection.phase === "connecting" && connection.lastFailure === null;
+      return (
+        connection.network !== "online" || connection.phase === "connected" || isInitialConnection
+      );
+    }).pipe(Atom.withLabel(`environment-threads-visible:${environmentId}`)),
+  );
+
   const environmentThreadRefsByProjectAtom = Atom.family((environmentId: EnvironmentId) => {
     let previous: ReadonlyMap<
       ProjectId,
@@ -127,6 +141,9 @@ export function createEnvironmentThreadShellAtoms<E>(input: {
       const next: EnvironmentThreadShell[] = [];
       const seen = new Set<string>();
       for (const projectRef of projectRefs) {
+        if (!get(environmentThreadsVisibleAtom(projectRef.environmentId))) {
+          continue;
+        }
         const refs =
           get(environmentThreadRefsByProjectAtom(projectRef.environmentId)).get(
             projectRef.projectId,
@@ -155,17 +172,7 @@ export function createEnvironmentThreadShellAtoms<E>(input: {
   const threadRefsAtom = Atom.make((get) => {
     const refs: ScopedThreadRef[] = [];
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
-      const connection = Option.getOrElse(
-        AsyncResult.value(get(input.connectionStateAtom(environmentId))),
-        () => AVAILABLE_CONNECTION_STATE,
-      );
-      const isInitialConnection =
-        connection.phase === "connecting" && connection.lastFailure === null;
-      if (
-        connection.network === "online" &&
-        connection.phase !== "connected" &&
-        !isInitialConnection
-      ) {
+      if (!get(environmentThreadsVisibleAtom(environmentId))) {
         continue;
       }
       refs.push(...get(environmentThreadRefsAtom(environmentId)));
