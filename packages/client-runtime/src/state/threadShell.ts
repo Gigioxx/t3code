@@ -7,8 +7,10 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
+import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
 import { scopeThreadShell } from "./models.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
@@ -29,8 +31,11 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
 
-export function createEnvironmentThreadShellAtoms(input: {
+export function createEnvironmentThreadShellAtoms<E>(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
+  readonly connectionStateAtom: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<AsyncResult.AsyncResult<SupervisorConnectionState, E>>;
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationShellSnapshot | null>;
@@ -150,6 +155,19 @@ export function createEnvironmentThreadShellAtoms(input: {
   const threadRefsAtom = Atom.make((get) => {
     const refs: ScopedThreadRef[] = [];
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
+      const connection = Option.getOrElse(
+        AsyncResult.value(get(input.connectionStateAtom(environmentId))),
+        () => AVAILABLE_CONNECTION_STATE,
+      );
+      const isInitialConnection =
+        connection.phase === "connecting" && connection.lastFailure === null;
+      if (
+        connection.network === "online" &&
+        connection.phase !== "connected" &&
+        !isInitialConnection
+      ) {
+        continue;
+      }
       refs.push(...get(environmentThreadRefsAtom(environmentId)));
     }
     if (threadRefsEqual(previousThreadRefs, refs)) {

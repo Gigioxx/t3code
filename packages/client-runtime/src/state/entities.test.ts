@@ -10,7 +10,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 
-import { PrimaryConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  ConnectionTransientError,
+  PrimaryConnectionTarget,
+  type SupervisorConnectionState,
+} from "../connection/model.ts";
 import {
   InvalidScopedProjectKeyError,
   InvalidScopedProjectRefCollectionKeyError,
@@ -150,6 +155,18 @@ function shellState(snapshot: OrchestrationShellSnapshot): EnvironmentShellState
 }
 
 function makeHarness() {
+  const connectionStateAtoms = Atom.family((_environmentId: EnvironmentId) =>
+    Atom.make(
+      AsyncResult.success<SupervisorConnectionState>({
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        network: "online",
+        phase: "connected",
+        attempt: 1,
+        generation: 1,
+      }),
+    ),
+  );
   const shellStateAtoms = Atom.family((_environmentId: EnvironmentId) =>
     Atom.make(AsyncResult.success(shellState(SNAPSHOT))),
   );
@@ -180,6 +197,7 @@ function makeHarness() {
   });
   const threadShells = createEnvironmentThreadShellAtoms({
     catalogValueAtom,
+    connectionStateAtom: connectionStateAtoms,
     snapshotAtom,
   });
   const threadDetails = createEnvironmentThreadDetailAtoms((environmentId, threadId) =>
@@ -188,6 +206,7 @@ function makeHarness() {
 
   return {
     registry: AtomRegistry.make(),
+    connectionStateAtom: connectionStateAtoms,
     shellStateAtom: shellStateAtoms(ENVIRONMENT_ID),
     threadStateAtom: (threadId: ThreadId) => threadStateAtoms(`${ENVIRONMENT_ID}\u0000${threadId}`),
     projects,
@@ -197,6 +216,76 @@ function makeHarness() {
 }
 
 describe("environment entity projections", () => {
+  it("hides unavailable environment caches from the global thread list while online", () => {
+    const harness = makeHarness();
+    const failure = new ConnectionTransientError({
+      reason: "remote-unavailable",
+      detail: "Remote environment is unavailable.",
+    });
+    const environmentRefs = harness.registry.get(
+      harness.threadShells.environmentThreadRefsAtom(ENVIRONMENT_ID),
+    );
+
+    harness.registry.set(
+      harness.connectionStateAtom(ENVIRONMENT_ID),
+      AsyncResult.success({
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "preparing",
+        attempt: 1,
+      }),
+    );
+    expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual(environmentRefs);
+
+    const unavailable = {
+      desired: true,
+      network: "online",
+      phase: "backoff",
+      stage: null,
+      attempt: 1,
+      generation: 0,
+      lastFailure: failure,
+      retryAt: 1,
+    } as const;
+    harness.registry.set(
+      harness.connectionStateAtom(ENVIRONMENT_ID),
+      AsyncResult.success(unavailable),
+    );
+
+    expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual([]);
+    expect(
+      harness.registry.get(harness.threadShells.environmentThreadRefsAtom(ENVIRONMENT_ID)),
+    ).toBe(environmentRefs);
+
+    harness.registry.set(
+      harness.connectionStateAtom(ENVIRONMENT_ID),
+      AsyncResult.success({
+        ...unavailable,
+        phase: "connecting",
+        stage: "preparing",
+        attempt: 2,
+        retryAt: null,
+      }),
+    );
+
+    expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual([]);
+
+    harness.registry.set(
+      harness.connectionStateAtom(ENVIRONMENT_ID),
+      AsyncResult.success({
+        ...unavailable,
+        network: "offline",
+        phase: "offline",
+        attempt: 2,
+        retryAt: null,
+      }),
+    );
+
+    expect(harness.registry.get(harness.threadShells.threadRefsAtom)).toEqual(environmentRefs);
+  });
+
   it("composes detail collections with authoritative shell workspace metadata", () => {
     const messages: OrchestrationThread["messages"] = [];
     const detail = {

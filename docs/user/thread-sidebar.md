@@ -7,6 +7,10 @@ one environment.
 Pinned threads still move to **Settled** when they become inactive. They also move when their pull
 request merges if **Auto-settle merged threads** is enabled.
 
+When a remote environment is unavailable, its cached threads are hidden from the combined sidebar
+while you are online. The cache is kept and appears again after reconnecting; while your device is
+offline, cached threads remain visible for browsing.
+
 When you un-settle a thread, it returns to the top of the active list so you can find it right
 away. Its timestamps do not change. Other threads keep their positions.
 
