@@ -666,7 +666,15 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       yield* runSteps(manager.activate);
     }).pipe(
       Effect.tapError(() =>
-        installed ? runSteps(manager.restart).pipe(Effect.ignore) : Effect.void,
+        installed
+          ? runSteps(manager.restart).pipe(Effect.ignore)
+          : manager.kind === "systemd"
+            ? Effect.gen(function* () {
+                yield* runSteps(manager.deactivate).pipe(Effect.ignore);
+                yield* fs.remove(unitPath).pipe(Effect.ignore);
+                yield* runSteps(manager.finalize).pipe(Effect.ignore);
+              })
+            : Effect.void,
       ),
     );
     return plan;

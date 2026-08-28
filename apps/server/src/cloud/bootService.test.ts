@@ -223,6 +223,22 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     }),
   );
 
+  it.effect("rolls back a fresh install when activation fails", () =>
+    Effect.gen(function* () {
+      const { service, commands, control } = yield* makeHarness();
+      control.failCommand = "loginctl enable-linger";
+
+      expect((yield* service.install.pipe(Effect.flip))._tag).toBe("BootServiceCommandError");
+      expect((yield* service.status).installed).toBe(false);
+      expect(commands.filter((command) => command.startsWith("systemctl "))).toEqual([
+        "systemctl --user daemon-reload",
+        "systemctl --user enable t3code.service",
+        "systemctl --user disable --now t3code.service",
+        "systemctl --user daemon-reload",
+      ]);
+    }),
+  );
+
   it.effect("restarts an installed service when repair fails", () =>
     Effect.gen(function* () {
       const { service, commands, control } = yield* makeHarness();
