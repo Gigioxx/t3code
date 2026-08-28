@@ -2339,6 +2339,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ),
       );
 
+  const hasActiveProjectAtWorkspaceRoot: ProjectionSnapshotQueryShape["hasActiveProjectAtWorkspaceRoot"] =
+    (workspaceRoot) =>
+      getActiveProjectRowByWorkspaceRoot({ workspaceRoot }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.hasActiveProjectAtWorkspaceRoot:query",
+            "ProjectionSnapshotQuery.hasActiveProjectAtWorkspaceRoot:decodeRow",
+          ),
+        ),
+        Effect.map(Option.isSome),
+      );
+
   const getProjectShellById: ProjectionSnapshotQueryShape["getProjectShellById"] = (projectId) =>
     getActiveProjectRowById({ projectId }).pipe(
       Effect.mapError(
@@ -2854,6 +2866,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getSnapshotSequence,
     getCounts,
     getActiveProjectByWorkspaceRoot,
+    hasActiveProjectAtWorkspaceRoot,
     getProjectShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
