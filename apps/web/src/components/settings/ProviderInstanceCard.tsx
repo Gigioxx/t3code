@@ -426,7 +426,7 @@ export function ProviderInstanceCard({
   onRunUpdate,
   isUpdating = false,
 }: ProviderInstanceCardProps) {
-  const [activeTab, setActiveTab] = useState<"models" | "configuration">("configuration");
+  const [activeTab, setActiveTab] = useState<"models" | "configuration">("models");
   const enabled = resolveProviderInstanceEnabled(instance);
   // A locally disabled provider stays neutral even if its last server status
   // is stale. Enabled providers use the server status when one is available.
