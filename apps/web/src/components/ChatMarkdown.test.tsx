@@ -202,6 +202,9 @@ describe("ChatMarkdown ordered list numbering", () => {
     expect(html).toContain('value="1"');
     expect(html).toContain('value="5"');
     expect(html).toContain('value="15"');
+    // Forced decimal markers keep nested alpha/roman styles from repainting
+    // the literal value as a letter.
+    expect(html).toContain("list-style-type:decimal");
   });
 
   it("widens the marker gutter for large typed ordinals", () => {

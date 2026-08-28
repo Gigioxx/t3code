@@ -22,10 +22,15 @@ class FakeElement {
   constructor(
     readonly tagName: string,
     private readonly classNames: ReadonlyArray<string> = [],
+    private readonly attrs: Record<string, string> = {},
   ) {}
 
   get localName(): string {
     return this.tagName.toLowerCase();
+  }
+
+  get children(): ReadonlyArray<FakeElement> {
+    return this.childNodes.filter((child): child is FakeElement => child.nodeType === ELEMENT_NODE);
   }
 
   get textContent(): string {
@@ -37,12 +42,16 @@ class FakeElement {
     return this;
   }
 
-  getAttribute(): string | null {
-    return null;
+  getAttribute(name: string): string | null {
+    return this.attrs[name] ?? null;
   }
 
-  hasAttribute(): boolean {
-    return false;
+  hasAttribute(name: string): boolean {
+    return name in this.attrs;
+  }
+
+  querySelector(): null {
+    return null;
   }
 }
 
@@ -84,6 +93,29 @@ describe("serializeRenderedMarkdownFragment", () => {
     expect(serializeRenderedMarkdownFragment(asNode(container))).toBe(
       "git show-ref --verify refs/remotes/origin/opt/deploy/dev",
     );
+  });
+
+  it("copies the rendered ordinals of a literal-numbered list", () => {
+    const list = new FakeElement("OL").append(
+      new FakeElement("LI", [], { value: "1" }).append(new FakeText("one")),
+      new FakeElement("LI", [], { value: "5" }).append(new FakeText("five")),
+      new FakeElement("LI", [], { value: "15" }).append(new FakeText("fifteen")),
+    );
+    const container = new FakeElement("DIV").append(list);
+
+    expect(serializeRenderedMarkdownFragment(asNode(container))).toBe(
+      "1. one\n5. five\n15. fifteen",
+    );
+  });
+
+  it("continues counting after a value reset like the browser counter", () => {
+    const list = new FakeElement("OL").append(
+      new FakeElement("LI", [], { value: "5" }).append(new FakeText("five")),
+      new FakeElement("LI").append(new FakeText("six")),
+    );
+    const container = new FakeElement("DIV").append(list);
+
+    expect(serializeRenderedMarkdownFragment(asNode(container))).toBe("5. five\n6. six");
   });
 
   it("keeps a multi-line code selection plain instead of inline-wrapping it", () => {

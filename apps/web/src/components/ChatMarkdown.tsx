@@ -2000,9 +2000,13 @@ function ChatMarkdown({
             }, undefined)
           : undefined;
         const gutterStyle = orderedListGutterStyle(items.length, start, widestMarkerNumber);
-        return (
-          <ol {...props} start={start} style={gutterStyle ? { ...style, ...gutterStyle } : style} />
-        );
+        // Nested lists default to alpha/roman markers, which would paint a
+        // literal `5` as `e.` — force decimal whenever literal ordinals apply.
+        const literalStyle =
+          widestMarkerNumber !== undefined ? ({ listStyleType: "decimal" } as const) : undefined;
+        const mergedStyle =
+          gutterStyle || literalStyle ? { ...style, ...gutterStyle, ...literalStyle } : style;
+        return <ol {...props} start={start} style={mergedStyle} />;
       },
       li({ node, children, value, ...props }) {
         const listItemStart = node?.position?.start.offset;
