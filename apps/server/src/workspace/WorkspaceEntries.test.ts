@@ -658,6 +658,31 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }),
     );
 
+    it.effect("includes symlinked directories and excludes other symlinks", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-browse-symlink-" });
+        yield* writeTextFile(cwd, "real-dir/index.ts", "export {};\n");
+        yield* writeTextFile(cwd, "real-file.txt", "ignore me");
+        yield* fileSystem.symlink(path.join(cwd, "real-dir"), path.join(cwd, "linked-dir"));
+        yield* fileSystem.symlink(path.join(cwd, "real-file.txt"), path.join(cwd, "linked-file"));
+        yield* fileSystem.symlink(path.join(cwd, "missing-target"), path.join(cwd, "broken-link"));
+        yield* fileSystem.symlink(path.join(cwd, "cycle-b"), path.join(cwd, "cycle-a"));
+        yield* fileSystem.symlink(path.join(cwd, "cycle-a"), path.join(cwd, "cycle-b"));
+
+        const result = yield* workspaceEntries.browse({
+          partialPath: yield* appendSeparator(cwd),
+        });
+
+        expect(result.entries).toEqual([
+          { name: "linked-dir", fullPath: path.join(cwd, "linked-dir") },
+          { name: "real-dir", fullPath: path.join(cwd, "real-dir") },
+        ]);
+      }),
+    );
+
     it.effect("shows dot directories in directory mode and hidden-prefix mode", () =>
       Effect.gen(function* () {
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;

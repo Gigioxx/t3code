@@ -219,13 +219,26 @@ export const make = Effect.gen(function* () {
       const entries: Array<{ readonly name: string; readonly fullPath: string }> = [];
       for (const dirent of dirents) {
         if (
-          dirent.isDirectory() &&
-          dirent.name.toLowerCase().startsWith(lowerPrefix) &&
-          (showHidden || !dirent.name.startsWith("."))
+          !dirent.name.toLowerCase().startsWith(lowerPrefix) ||
+          (!showHidden && dirent.name.startsWith("."))
         ) {
+          continue;
+        }
+
+        const fullPath = path.join(parentPath, dirent.name);
+        const isDirectory =
+          dirent.isDirectory() ||
+          (dirent.isSymbolicLink() &&
+            (yield* Effect.promise(() =>
+              NodeFSP.stat(fullPath).then(
+                (stats) => stats.isDirectory(),
+                () => false,
+              ),
+            )));
+        if (isDirectory) {
           entries.push({
             name: dirent.name,
-            fullPath: path.join(parentPath, dirent.name),
+            fullPath,
           });
         }
       }
