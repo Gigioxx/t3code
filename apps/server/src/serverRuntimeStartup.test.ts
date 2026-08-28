@@ -188,6 +188,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
             updatedAt: "2026-01-01T00:00:00.000Z",
             deletedAt: null,
           }),
+        hasActiveProjectAtWorkspaceRoot: () => Effect.succeed(true),
         getProjectShells: () => Effect.die("unused"),
         getProjectShellById: () => Effect.die("unused"),
         getFirstActiveThreadIdByProjectId: () => Effect.succeedSome(bootstrapThreadId),
@@ -319,6 +320,7 @@ it.effect.each([
                 })
               : Option.none(),
           ),
+        hasActiveProjectAtWorkspaceRoot: () => Effect.succeed(existing),
         getProjectShells: () => Effect.die("unused"),
         getProjectShellById: () => Effect.die("unused"),
         getFirstActiveThreadIdByProjectId: () => Effect.succeedNone,
@@ -459,6 +461,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
         getCounts: () => Effect.die("unused"),
         getEventReplayStats: () => Effect.die("unused"),
         getActiveProjectByWorkspaceRoot: () => Effect.succeedNone,
+        hasActiveProjectAtWorkspaceRoot: () => Effect.succeed(false),
         getProjectShells: () => Effect.die("unused"),
         getProjectShellById: () => Effect.die("unused"),
         getFirstActiveThreadIdByProjectId: () => Effect.succeedNone,

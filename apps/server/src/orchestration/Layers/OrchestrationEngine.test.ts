@@ -448,6 +448,7 @@ describe("OrchestrationEngine", () => {
           getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 1 }),
           getEventReplayStats: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.succeedNone,
+          hasActiveProjectAtWorkspaceRoot: () => Effect.succeed(false),
           getProjectShellById: () => Effect.succeedNone,
           getProjectShells: () => Effect.succeed([]),
           getFirstActiveThreadIdByProjectId: () => Effect.succeedNone,

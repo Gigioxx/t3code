@@ -1056,6 +1056,7 @@ const buildAppUnderTest = (options?: {
               payloadBytes: 0,
             }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeedNone,
+          hasActiveProjectAtWorkspaceRoot: () => Effect.succeed(false),
           getFirstActiveThreadIdByProjectId: () => Effect.succeedNone,
           getImportedAgentSessionSources: () => Effect.succeed([]),
           getThreadCheckpointContext: () => Effect.succeedNone,
