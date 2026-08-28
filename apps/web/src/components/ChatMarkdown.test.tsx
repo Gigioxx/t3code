@@ -188,6 +188,65 @@ describe("orderedListGutterStyle", () => {
   });
 });
 
+describe("ChatMarkdown ordered list numbering", () => {
+  it("keeps the typed ordinals for chat-style input", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd={undefined}
+        text={"1. one\n5. five\n15. fifteen"}
+        lineBreaks
+        literalListNumbers
+      />,
+    );
+
+    expect(html).toContain('value="1"');
+    expect(html).toContain('value="5"');
+    expect(html).toContain('value="15"');
+  });
+
+  it("widens the marker gutter for large typed ordinals", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd={undefined}
+        text={"1. one\n150. one fifty"}
+        lineBreaks
+        literalListNumbers
+      />,
+    );
+
+    expect(html).toContain("--list-gutter:4ch");
+  });
+
+  it("renumbers sequentially for regular markdown", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown cwd={undefined} text={"1. one\n5. five\n15. fifteen"} />,
+    );
+
+    expect(html).not.toContain('value="5"');
+    expect(html).not.toContain('value="15"');
+  });
+
+  it("keeps value attributes from parsed raw HTML lists", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd={undefined}
+        text={'<ol><li value="5">five</li><li>six</li></ol>'}
+        parseRawHtml
+      />,
+    );
+
+    expect(html).toContain('value="5"');
+  });
+
+  it("leaves bullet lists untouched", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown cwd={undefined} text={"- one\n- two"} lineBreaks literalListNumbers />,
+    );
+
+    expect(html).not.toContain("value=");
+  });
+});
+
 describe("ChatMarkdown Windows file links", () => {
   const environmentId = EnvironmentId.make("env-windows");
 

@@ -147,6 +147,8 @@ interface ChatMarkdownProps {
   className?: string;
   /** Treat single newlines as hard breaks — chat-style user input. */
   lineBreaks?: boolean;
+  /** Keep the ordinals the author typed instead of renumbering ordered lists. */
+  literalListNumbers?: boolean;
   /** Parse sanitized raw HTML instead of displaying its source text. */
   parseRawHtml?: boolean;
 }
@@ -228,13 +230,33 @@ function findTaskListMarkerOffset(markdown: string, listItemStart: number): numb
 export function orderedListGutterStyle(
   itemCount: number,
   start: unknown,
+  widestMarkerNumber?: number,
 ): { "--list-gutter": string } | undefined {
   const parsedStart = Number.parseInt(String(start ?? 1), 10);
   const firstNumber = Number.isNaN(parsedStart) ? 1 : parsedStart;
-  const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
+  const lastNumber = Math.max(firstNumber + Math.max(itemCount - 1, 0), widestMarkerNumber ?? 0);
   const markerWidth = Math.max(String(firstNumber).length, String(lastNumber).length);
   if (markerWidth <= 2) return undefined;
   return { "--list-gutter": `${markerWidth + 1}ch` };
+}
+
+/**
+ * Reads the ordinal the author actually typed for a list item, so chat-style
+ * input (`literalListNumbers`) can render `1., 5., 15.` instead of renumbering
+ * to `1., 2., 3.` the way plain markdown would.
+ */
+function sourceOrderedListItemValue(
+  markdown: string,
+  listItemStart: number | undefined,
+): number | undefined {
+  if (typeof listItemStart !== "number") return undefined;
+  const firstLineEnd = markdown.indexOf("\n", listItemStart);
+  const firstLine = markdown.slice(
+    listItemStart,
+    firstLineEnd === -1 ? markdown.length : firstLineEnd,
+  );
+  const match = firstLine.match(/^\s*(\d{1,9})[.)]/);
+  return match?.[1] ? Number.parseInt(match[1], 10) : undefined;
 }
 
 type MarkdownHtmlAstNode = {
@@ -1635,6 +1657,7 @@ function ChatMarkdown({
   skills = EMPTY_MARKDOWN_SKILLS,
   className,
   lineBreaks = false,
+  literalListNumbers = false,
   parseRawHtml = true,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
@@ -1967,20 +1990,33 @@ function ChatMarkdown({
         );
       },
       ol({ node, start, style, ...props }) {
-        const itemCount =
-          node?.children?.filter((child) => child.type === "element" && child.tagName === "li")
-            .length ?? 0;
-        const gutterStyle = orderedListGutterStyle(itemCount, start);
+        const items =
+          node?.children?.filter((child) => child.type === "element" && child.tagName === "li") ??
+          [];
+        const widestMarkerNumber = literalListNumbers
+          ? items.reduce<number | undefined>((widest, item) => {
+              const value = sourceOrderedListItemValue(text, item.position?.start.offset);
+              return value !== undefined && value > (widest ?? 0) ? value : widest;
+            }, undefined)
+          : undefined;
+        const gutterStyle = orderedListGutterStyle(items.length, start, widestMarkerNumber);
         return (
           <ol {...props} start={start} style={gutterStyle ? { ...style, ...gutterStyle } : style} />
         );
       },
-      li({ node, children, ...props }) {
+      li({ node, children, value, ...props }) {
         const listItemStart = node?.position?.start.offset;
         const markerOffset =
           typeof listItemStart === "number" ? findTaskListMarkerOffset(text, listItemStart) : null;
+        const literalValue = literalListNumbers
+          ? sourceOrderedListItemValue(text, listItemStart)
+          : undefined;
         return (
-          <li {...props} data-task-marker-offset={markerOffset ?? undefined}>
+          <li
+            {...props}
+            value={literalValue ?? value}
+            data-task-marker-offset={markerOffset ?? undefined}
+          >
             {renderSkillInlineMarkdownChildren(children, skills)}
           </li>
         );
@@ -2214,6 +2250,7 @@ function ChatMarkdown({
     fileLinkParentSuffixByPath,
     inlineCodeFileLinkMetaByText,
     isStreaming,
+    literalListNumbers,
     markdownFileLinkMetaByHref,
     onTaskListChange,
     openFileInPanel,
