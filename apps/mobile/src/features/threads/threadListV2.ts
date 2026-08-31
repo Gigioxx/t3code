@@ -14,6 +14,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   activeThreadAnchorTimestampMs,
+  environmentUnavailableRank,
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId, ThreadLinkedPullRequest } from "@t3tools/contracts";
@@ -30,7 +31,7 @@ export { snoozeWakeLabel };
  * (approval), "in motion" (working), and "broken" (failed). Ready is the
  * unlabeled resting state.
  */
-export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "ready";
+export type ThreadListV2Status = "approval" | "input" | "working" | "offline" | "failed" | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 
 export interface ThreadListV2ChangeRequestState extends ChangeRequestSettleSource {
@@ -158,6 +159,23 @@ export function resolveThreadListV2Enabled(input: {
 }
 
 export function resolveThreadListV2Status(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "hasPendingApprovals" | "hasPendingUserInput" | "session" | "environmentUnavailable"
+  >,
+): ThreadListV2Status {
+  const status = resolveConnectedThreadListV2Status(thread);
+  // Same stale-claim rule as web's resolveSidebarThreadStatus.
+  if (
+    thread.environmentUnavailable &&
+    (status === "approval" || status === "input" || status === "working")
+  ) {
+    return "offline";
+  }
+  return status;
+}
+
+function resolveConnectedThreadListV2Status(
   thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
@@ -198,7 +216,9 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
  * list — a row holds its position between lifecycle transitions. The anchor
  * is creation time until an un-settle re-anchors it (see
  * activeThreadAnchorTimestampMs), so an un-settled thread surfaces at the
- * top instead of sinking back to its creation-order slot. Mirrors web's
+ * top instead of sinking back to its creation-order slot. The one status
+ * that does move a row is environment availability: threads on an
+ * unreachable environment sink below reachable ones. Mirrors web's
  * sortThreadsForSidebar.
  */
 export function sortThreadsForListV2<
@@ -206,12 +226,14 @@ export function sortThreadsForListV2<
     readonly id: string;
     readonly createdAt: string;
     readonly unsettledAt?: string | null | undefined;
+    readonly environmentUnavailable?: boolean;
   },
 >(threads: readonly T[]): T[] {
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
   // change-by-copy array methods.
   return [...threads].sort(
     (left, right) =>
+      environmentUnavailableRank(left) - environmentUnavailableRank(right) ||
       activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
       left.id.localeCompare(right.id),
   );

@@ -4,6 +4,7 @@ import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   activeThreadAnchorTimestampMs,
+  environmentUnavailableRank,
   getThreadSortTimestamp,
   sortThreads,
   toSortableTimestamp,
@@ -132,7 +133,8 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Plan Ready";
+    | "Plan Ready"
+    | "Offline";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -149,6 +151,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Plan Ready": 3,
   Monitoring: 2,
   Completed: 1,
+  Offline: 0,
 };
 
 type ThreadStatusInput = Pick<
@@ -160,6 +163,7 @@ type ThreadStatusInput = Pick<
   | "latestTurn"
   | "session"
   | "backgroundLiveness"
+  | "environmentUnavailable"
 > & {
   lastVisitedAt?: string | undefined;
 };
@@ -464,15 +468,37 @@ export type SidebarThreadStatus =
   | "input"
   | "working"
   | "monitoring"
+  | "offline"
   | "failed"
   | "ready";
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "session"
+  | "backgroundLiveness"
+  | "environmentUnavailable"
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
+  const status = resolveConnectedSidebarThreadStatus(thread);
+  // The canonical stale-claim rule, mirrored by every status resolver on web
+  // and mobile: an unreachable environment cannot run, ask, or be answered,
+  // so live states from its cached snapshot read as Offline. Failed and
+  // resting states are historical facts and stay as they are.
+  if (
+    thread.environmentUnavailable &&
+    (status === "approval" || status === "input" || status === "working" || status === "monitoring")
+  ) {
+    return "offline";
+  }
+  return status;
+}
+
+function resolveConnectedSidebarThreadStatus(
+  thread: SidebarThreadStatusInput,
+): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
@@ -538,15 +564,20 @@ export function firstValidTimestamp(
 // activeThreadAnchorTimestampMs), so an un-settled thread surfaces at the
 // top instead of sinking back to its creation-order slot. Status (including
 // pending approval) is carried by each card's edge strip, not by position.
+// The one status that does move a row is environment availability: threads
+// on an unreachable environment sink below reachable ones, since nothing on
+// them can progress or be acted on until it reconnects.
 export function sortThreadsForSidebar<
   T extends {
     readonly id: string;
     readonly createdAt: string;
     readonly unsettledAt?: string | null | undefined;
+    readonly environmentUnavailable?: boolean;
   },
 >(threads: readonly T[]): T[] {
   return [...threads].toSorted(
     (left, right) =>
+      environmentUnavailableRank(left) - environmentUnavailableRank(right) ||
       activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
       left.id.localeCompare(right.id),
   );
@@ -680,11 +711,26 @@ export function formatWorkingDurationLabel(elapsedMs: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+const OFFLINE_STATUS_PILL: ThreadStatusPill = {
+  label: "Offline",
+  colorClass: "text-zinc-500 dark:text-zinc-400",
+  dotClass: "bg-zinc-500 dark:bg-zinc-400",
+  pulse: false,
+};
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
-  const { thread } = input;
+  const pill = resolveConnectedThreadStatusPill(input.thread);
+  // Same stale-claim rule as resolveSidebarThreadStatus; Completed is a
+  // historical fact and stays.
+  if (input.thread.environmentUnavailable && pill !== null && pill.label !== "Completed") {
+    return OFFLINE_STATUS_PILL;
+  }
+  return pill;
+}
 
+function resolveConnectedThreadStatusPill(thread: ThreadStatusInput): ThreadStatusPill | null {
   if (thread.hasPendingApprovals) {
     return {
       label: "Pending Approval",
