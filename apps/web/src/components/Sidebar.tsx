@@ -1166,25 +1166,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 icon: "input" as const,
                 className: "text-indigo-600 dark:text-indigo-300",
               }
-            : status === "failed"
+            : status === "offline"
               ? {
-                  label: "Failed",
-                  icon: "failed" as const,
-                  className: "text-red-700 dark:text-red-300",
+                  label: "Offline",
+                  icon: "offline" as const,
+                  className: "text-zinc-500 dark:text-zinc-400",
                 }
-              : isWoke
+              : status === "failed"
                 ? {
-                    label: "Woke",
-                    icon: "woke" as const,
-                    className: "text-warning-foreground",
+                    label: "Failed",
+                    icon: "failed" as const,
+                    className: "text-red-700 dark:text-red-300",
                   }
-                : isUnread
+                : isWoke
                   ? {
-                      label: "Done",
-                      icon: "done" as const,
-                      className: "text-emerald-700 dark:text-emerald-300",
+                      label: "Woke",
+                      icon: "woke" as const,
+                      className: "text-warning-foreground",
                     }
-                  : null;
+                  : isUnread
+                    ? {
+                        label: "Done",
+                        icon: "done" as const,
+                        className: "text-emerald-700 dark:text-emerald-300",
+                      }
+                    : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({

@@ -148,6 +148,44 @@ describe("resolveThreadListV2Status", () => {
       "ready",
     );
   });
+
+  it("reads live states as offline while the environment is unavailable", () => {
+    const running = makeThread({
+      id: ThreadId.make("t"),
+      title: "t",
+      session: {
+        threadId: ThreadId.make("t"),
+        status: "running",
+        providerName: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: NOW,
+      },
+    });
+    expect(resolveThreadListV2Status({ ...running, environmentUnavailable: true })).toBe("offline");
+    expect(
+      resolveThreadListV2Status({
+        ...running,
+        hasPendingApprovals: true,
+        environmentUnavailable: true,
+      }),
+    ).toBe("offline");
+    // A cached failure is a historical fact, and quiet threads stay quiet.
+    expect(
+      resolveThreadListV2Status({
+        ...running,
+        session: { ...running.session!, status: "error" },
+        environmentUnavailable: true,
+      }),
+    ).toBe("failed");
+    expect(
+      resolveThreadListV2Status(
+        makeThread({ id: ThreadId.make("t"), title: "t", environmentUnavailable: true }),
+      ),
+    ).toBe("ready");
+  });
 });
 
 describe("queued messages keep a settled thread active", () => {

@@ -39,7 +39,7 @@ export { snoozeWakeLabel };
  * (approval), "in motion" (working), and "broken" (failed). Ready is the
  * unlabeled resting state.
  */
-export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "ready";
+export type ThreadListV2Status = "approval" | "input" | "working" | "offline" | "failed" | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 
 export function resolveThreadListV2SnoozeMenuSelection(input: {
@@ -118,6 +118,23 @@ export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
 export function resolveThreadListV2Status(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "hasPendingApprovals" | "hasPendingUserInput" | "session" | "environmentUnavailable"
+  >,
+): ThreadListV2Status {
+  const status = resolveConnectedThreadListV2Status(thread);
+  // Same stale-claim rule as web's resolveSidebarThreadStatus.
+  if (
+    thread.environmentUnavailable &&
+    (status === "approval" || status === "input" || status === "working")
+  ) {
+    return "offline";
+  }
+  return status;
+}
+
+function resolveConnectedThreadListV2Status(
   thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {

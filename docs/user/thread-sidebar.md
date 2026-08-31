@@ -100,6 +100,15 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+## Unreachable environments
+
+When a remote environment cannot be reached, its threads stay in the list but show **Offline**
+instead of live states like Working or Pending Approval: those come from the last data the
+environment sent and cannot update or be acted on until it reconnects. Actions that need the
+environment, such as Stop or Settle, fail with a message naming the disconnected environment. To
+clear the threads entirely, remove the environment in **Settings → Connections**; they return when
+you pair it again.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

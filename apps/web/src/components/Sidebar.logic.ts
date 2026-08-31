@@ -528,7 +528,8 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Plan Ready";
+    | "Plan Ready"
+    | "Offline";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -545,6 +546,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Plan Ready": 3,
   Monitoring: 2,
   Completed: 1,
+  Offline: 0,
 };
 
 type ThreadStatusInput = Pick<
@@ -556,6 +558,7 @@ type ThreadStatusInput = Pick<
   | "latestTurn"
   | "session"
   | "backgroundLiveness"
+  | "environmentUnavailable"
 > & {
   lastVisitedAt?: string | undefined;
 };
@@ -793,6 +796,7 @@ export type SidebarThreadStatus =
   | "input"
   | "working"
   | "monitoring"
+  | "offline"
   | "failed"
   | "ready";
 
@@ -805,7 +809,9 @@ export function shouldRecedeSidebarThread(input: {
 }): boolean {
   if (input.isActive || input.isSelected || input.status === "input") return false;
   if (input.status === "working" || input.status === "monitoring") return true;
-  if (input.status === "ready" || input.status === "approval") {
+  // Offline rows recede like resting ones: nothing can happen there until the
+  // environment reconnects.
+  if (input.status === "ready" || input.status === "approval" || input.status === "offline") {
     return !input.isUnread && !input.isWoke;
   }
   return false;
@@ -813,10 +819,31 @@ export function shouldRecedeSidebarThread(input: {
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "session"
+  | "backgroundLiveness"
+  | "environmentUnavailable"
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
+  const status = resolveConnectedSidebarThreadStatus(thread);
+  // The canonical stale-claim rule, mirrored by every status resolver on web
+  // and mobile: an unreachable environment cannot run, ask, or be answered,
+  // so live states from its cached snapshot read as Offline. Failed and
+  // resting states are historical facts and stay as they are.
+  if (
+    thread.environmentUnavailable &&
+    (status === "approval" || status === "input" || status === "working" || status === "monitoring")
+  ) {
+    return "offline";
+  }
+  return status;
+}
+
+function resolveConnectedSidebarThreadStatus(
+  thread: SidebarThreadStatusInput,
+): SidebarThreadStatus {
   if (thread.hasPendingApprovals) {
     return "approval";
   }
@@ -972,11 +999,26 @@ export function formatWorkingDurationLabel(elapsedMs: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+const OFFLINE_STATUS_PILL: ThreadStatusPill = {
+  label: "Offline",
+  colorClass: "text-zinc-500 dark:text-zinc-400",
+  dotClass: "bg-zinc-500 dark:bg-zinc-400",
+  pulse: false,
+};
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
-  const { thread } = input;
+  const pill = resolveConnectedThreadStatusPill(input.thread);
+  // Same stale-claim rule as resolveSidebarThreadStatus; Completed is a
+  // historical fact and stays.
+  if (input.thread.environmentUnavailable && pill !== null && pill.label !== "Completed") {
+    return OFFLINE_STATUS_PILL;
+  }
+  return pill;
+}
 
+function resolveConnectedThreadStatusPill(thread: ThreadStatusInput): ThreadStatusPill | null {
   if (thread.hasPendingApprovals) {
     return {
       label: "Pending Approval",

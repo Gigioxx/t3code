@@ -7,8 +7,11 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
+import { AVAILABLE_CONNECTION_STATE, type SupervisorConnectionState } from "../connection/model.ts";
+import { presentConnectionState } from "../connection/presentation.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
 import { scopeThreadShell } from "./models.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
@@ -29,28 +32,55 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
 
-export function createEnvironmentThreadShellAtoms(input: {
+export function createEnvironmentThreadShellAtoms<E>(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
+  readonly connectionStateAtom: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<AsyncResult.AsyncResult<SupervisorConnectionState, E>>;
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationShellSnapshot | null>;
 }) {
+  // Unavailability requires evidence of trouble while this device is online:
+  // the presented phase is reconnecting (a lost or failed connection) or
+  // error (blocked). Idle catalogs, first connection attempts, and offline
+  // browsing all read as available so cached rows keep their normal
+  // presentation there.
+  const environmentUnavailableAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const connection = Option.getOrElse(
+        AsyncResult.value(get(input.connectionStateAtom(environmentId))),
+        () => AVAILABLE_CONNECTION_STATE,
+      );
+      if (connection.network !== "online") {
+        return false;
+      }
+      const phase = presentConnectionState(connection).phase;
+      return phase === "reconnecting" || phase === "error";
+    }).pipe(Atom.withLabel(`environment-unavailable:${environmentId}`)),
+  );
+
   // Point reads and aggregate lists share values without keeping an atom alive
   // for every listed thread. Replaced source objects can be collected.
   const scopedThreads = new WeakMap<
     OrchestrationThreadShell,
-    Map<EnvironmentId, EnvironmentThreadShell>
+    Map<string, EnvironmentThreadShell>
   >();
-  const scopedThread = (environmentId: EnvironmentId, thread: OrchestrationThreadShell) => {
+  const scopedThread = (
+    environmentId: EnvironmentId,
+    thread: OrchestrationThreadShell,
+    environmentUnavailable: boolean,
+  ) => {
     let byEnvironment = scopedThreads.get(thread);
     if (byEnvironment === undefined) {
       byEnvironment = new Map();
       scopedThreads.set(thread, byEnvironment);
     }
-    let value = byEnvironment.get(environmentId);
+    const cacheKey = environmentUnavailable ? `${environmentId}:unavailable` : environmentId;
+    let value = byEnvironment.get(cacheKey);
     if (value === undefined) {
-      value = scopeThreadShell(environmentId, thread);
-      byEnvironment.set(environmentId, value);
+      value = scopeThreadShell(environmentId, thread, environmentUnavailable);
+      byEnvironment.set(cacheKey, value);
     }
     return value;
   };
@@ -134,7 +164,13 @@ export function createEnvironmentThreadShellAtoms(input: {
     const ref = parseThreadKey(key);
     return Atom.make((get) => {
       const source = get(environmentThreadIndexAtom(ref.environmentId)).get(ref.threadId) ?? null;
-      return source === null ? null : scopedThread(ref.environmentId, source);
+      return source === null
+        ? null
+        : scopedThread(
+            ref.environmentId,
+            source,
+            get(environmentUnavailableAtom(ref.environmentId)),
+          );
     }).pipe(Atom.withLabel(`environment-thread-shell:${key}`));
   });
 
@@ -151,6 +187,7 @@ export function createEnvironmentThreadShellAtoms(input: {
           ) ?? EMPTY_SCOPED_THREAD_REFS;
         if (refs.length === 0) continue;
         const threads = get(environmentThreadIndexAtom(projectRef.environmentId));
+        const unavailable = get(environmentUnavailableAtom(projectRef.environmentId));
         for (const ref of refs) {
           const key = threadKey(ref);
           if (seen.has(key)) {
@@ -159,7 +196,7 @@ export function createEnvironmentThreadShellAtoms(input: {
           seen.add(key);
           const thread = threads.get(ref.threadId);
           if (thread !== undefined) {
-            next.push(scopedThread(ref.environmentId, thread));
+            next.push(scopedThread(ref.environmentId, thread, unavailable));
           }
         }
       }
@@ -188,8 +225,9 @@ export function createEnvironmentThreadShellAtoms(input: {
   const threadShellsAtom = Atom.make((get) => {
     const next: EnvironmentThreadShell[] = [];
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
+      const unavailable = get(environmentUnavailableAtom(environmentId));
       for (const thread of get(environmentThreadsAtom(environmentId))) {
-        next.push(scopedThread(environmentId, thread));
+        next.push(scopedThread(environmentId, thread, unavailable));
       }
     }
     if (arrayElementsEqual(previousThreadShells, next)) {
