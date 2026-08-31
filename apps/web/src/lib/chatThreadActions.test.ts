@@ -59,13 +59,32 @@ describe("chatThreadActions", () => {
     ).toEqual(CARRIED_SELECTION);
   });
 
-  it("keeps the project default above any carried selection", () => {
+  it("keeps the carried selection above the project default", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: PROJECT_DEFAULT_SELECTION,
         carrySelection: CARRIED_SELECTION,
         carrySourceDraftId: "draft-a",
         destinationDraftId: "draft-b",
+      }),
+    ).toEqual(CARRIED_SELECTION);
+  });
+
+  it("falls back to the project default when there is nothing to carry", () => {
+    expect(
+      resolveNewThreadModelSelectionOverride({
+        projectDefaultSelection: PROJECT_DEFAULT_SELECTION,
+        carrySelection: null,
+        carrySourceDraftId: null,
+        destinationDraftId: "draft-b",
+      }),
+    ).toEqual(PROJECT_DEFAULT_SELECTION);
+    expect(
+      resolveNewThreadModelSelectionOverride({
+        projectDefaultSelection: PROJECT_DEFAULT_SELECTION,
+        carrySelection: CARRIED_SELECTION,
+        carrySourceDraftId: "draft-a",
+        destinationDraftId: "draft-a",
       }),
     ).toEqual(PROJECT_DEFAULT_SELECTION);
   });

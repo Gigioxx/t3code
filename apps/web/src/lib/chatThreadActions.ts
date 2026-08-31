@@ -39,16 +39,19 @@ export function resolveNewDraftStartFromOrigin(input: {
   return input.envMode === "worktree" && input.newWorktreesStartFromOrigin;
 }
 
+// The model the user is looking at carries into the new thread. The project
+// default only fills in when there is nothing to carry: every project gets a
+// default seeded at creation, so letting it outrank the carried selection
+// would reset the model on every new thread.
 export function resolveNewThreadModelSelectionOverride(input: {
   readonly projectDefaultSelection: ModelSelection | null;
   readonly carrySelection: ModelSelection | null;
   readonly carrySourceDraftId: string | null;
   readonly destinationDraftId: string;
 }): ModelSelection | null {
-  return (
-    input.projectDefaultSelection ??
-    (input.carrySourceDraftId === input.destinationDraftId ? null : input.carrySelection)
-  );
+  const carrySelection =
+    input.carrySourceDraftId === input.destinationDraftId ? null : input.carrySelection;
+  return carrySelection ?? input.projectDefaultSelection;
 }
 
 export function resolveThreadActionProjectRef(
