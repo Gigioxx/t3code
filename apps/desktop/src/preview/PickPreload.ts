@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off - This isolated Electron preload does not run inside an Effect runtime.
+// @effect-diagnostics globalDate:off globalTimers:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
 import { getElementContext } from "react-grab/primitives";
 import type {
@@ -279,24 +279,32 @@ function toStackFrame(frame: {
   };
 }
 
-async function captureElement(element: Element): Promise<PickedElementPayload | null> {
+export async function captureElement(element: Element): Promise<PickedElementPayload | null> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
   try {
-    const context = await getElementContext(element);
-    const stack = (context.stack ?? []).map(toStackFrame);
+    const context = await Promise.race([
+      getElementContext(element).catch(() => null),
+      new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), 5_000);
+      }),
+    ]);
+    const stack = (context?.stack ?? []).map(toStackFrame);
     return {
       pageUrl: location.href,
       pageTitle: document.title?.trim() || null,
       tagName: element.tagName.toLowerCase(),
-      selector: context.selector,
-      htmlPreview: context.htmlPreview ?? "",
-      componentName: context.componentName,
+      selector: context?.selector ?? null,
+      htmlPreview: context?.htmlPreview ?? element.outerHTML.slice(0, 4_000),
+      componentName: context?.componentName ?? null,
       source: stack[0] ?? null,
       stack,
-      styles: context.styles ?? "",
+      styles: context?.styles ?? "",
       pickedAt: new Date().toISOString(),
     };
   } catch {
     return null;
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
   }
 }
 
