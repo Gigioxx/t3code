@@ -57,76 +57,49 @@ const MINIMUM_CLAUDE_FABLE_5_VERSION = "2.1.169";
 const MINIMUM_CLAUDE_OPUS_4_8_VERSION = "2.1.154";
 const MINIMUM_CLAUDE_OPUS_4_7_VERSION = "2.1.111";
 
+const CLAUDE_FABLE_MODEL_CAPABILITIES = createModelCapabilities({
+  optionDescriptors: [
+    buildSelectOptionDescriptor({
+      id: "effort",
+      label: "Reasoning",
+      options: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High", isDefault: true },
+        { value: "xhigh", label: "Extra High" },
+        { value: "max", label: "Max" },
+        {
+          value: "ultracode",
+          label: "Ultracode",
+          description: "xhigh effort plus multi-agent workflow orchestration",
+        },
+        { value: "ultrathink", label: "Ultrathink" },
+      ],
+      promptInjectedValues: ["ultrathink"],
+    }),
+    buildSelectOptionDescriptor({
+      id: "contextWindow",
+      label: "Context Window",
+      options: [
+        { value: "200k", label: "200k" },
+        { value: "1m", label: "1M", isDefault: true },
+      ],
+    }),
+  ],
+});
+
 const CLAUDE_MODEL_CATALOG: ReadonlyArray<ServerProviderModel> = [
   {
     slug: "claude-fable-5-1",
     name: "Claude Fable 5.1",
     isCustom: false,
-    capabilities: createModelCapabilities({
-      optionDescriptors: [
-        buildSelectOptionDescriptor({
-          id: "effort",
-          label: "Reasoning",
-          options: [
-            { value: "low", label: "Low" },
-            { value: "medium", label: "Medium" },
-            { value: "high", label: "High", isDefault: true },
-            { value: "xhigh", label: "Extra High" },
-            { value: "max", label: "Max" },
-            {
-              value: "ultracode",
-              label: "Ultracode",
-              description: "xhigh effort plus multi-agent workflow orchestration",
-            },
-            { value: "ultrathink", label: "Ultrathink" },
-          ],
-          promptInjectedValues: ["ultrathink"],
-        }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          options: [
-            { value: "200k", label: "200k" },
-            { value: "1m", label: "1M", isDefault: true },
-          ],
-        }),
-      ],
-    }),
+    capabilities: CLAUDE_FABLE_MODEL_CAPABILITIES,
   },
   {
     slug: "claude-fable-5",
     name: "Claude Fable 5",
     isCustom: false,
-    capabilities: createModelCapabilities({
-      optionDescriptors: [
-        buildSelectOptionDescriptor({
-          id: "effort",
-          label: "Reasoning",
-          options: [
-            { value: "low", label: "Low" },
-            { value: "medium", label: "Medium" },
-            { value: "high", label: "High", isDefault: true },
-            { value: "xhigh", label: "Extra High" },
-            { value: "max", label: "Max" },
-            {
-              value: "ultracode",
-              label: "Ultracode",
-              description: "xhigh effort plus multi-agent workflow orchestration",
-            },
-            { value: "ultrathink", label: "Ultrathink" },
-          ],
-          promptInjectedValues: ["ultrathink"],
-        }),
-        buildSelectOptionDescriptor({
-          id: "contextWindow",
-          label: "Context Window",
-          options: [
-            { value: "200k", label: "200k" },
-            { value: "1m", label: "1M", isDefault: true },
-          ],
-        }),
-      ],
-    }),
+    capabilities: CLAUDE_FABLE_MODEL_CAPABILITIES,
   },
   {
     slug: "claude-opus-5",

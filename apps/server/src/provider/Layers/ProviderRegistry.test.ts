@@ -2107,6 +2107,49 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ),
       );
 
+      it.effect.each<{
+        version: string;
+        expectedModel: string;
+        expectedMessage: string | undefined;
+      }>([
+        {
+          version: "2.1.257",
+          expectedModel: "claude-fable-5-1",
+          expectedMessage: undefined,
+        },
+        {
+          version: "2.1.256",
+          expectedModel: "claude-fable-5",
+          expectedMessage:
+            "Claude Code v2.1.256 is too old for Claude Fable 5.1. Upgrade to v2.1.257 or newer to access it.",
+        },
+      ])(
+        "selects $expectedModel on Claude Code $version",
+        ({ version, expectedModel, expectedMessage }) =>
+          Effect.gen(function* () {
+            const status = yield* checkClaudeProviderStatus(
+              defaultClaudeSettings,
+              claudeCapabilities(),
+            );
+            assert.strictEqual(status.models[0]?.slug, expectedModel);
+            assert.strictEqual(status.message, expectedMessage);
+          }).pipe(
+            Effect.provide(
+              mockSpawnerLayer((args) => {
+                const joined = args.join(" ");
+                if (joined === "--version") return { stdout: `${version}\n`, stderr: "", code: 0 };
+                if (joined === "auth status")
+                  return {
+                    stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                    stderr: "",
+                    code: 0,
+                  };
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          ),
+      );
+
       it.effect("includes Claude Fable 5 on supported Claude Code versions", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -2120,62 +2163,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
               if (joined === "--version") return { stdout: "2.1.169\n", stderr: "", code: 0 };
-              if (joined === "auth status")
-                return {
-                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
-                  stderr: "",
-                  code: 0,
-                };
-              throw new Error(`Unexpected args: ${joined}`);
-            }),
-          ),
-        ),
-      );
-
-      it.effect("includes Claude Fable 5.1 on supported Claude Code versions", () =>
-        Effect.gen(function* () {
-          const status = yield* checkClaudeProviderStatus(
-            defaultClaudeSettings,
-            claudeCapabilities(),
-          );
-          const fable51 = status.models.find((model) => model.slug === "claude-fable-5-1");
-          assert.strictEqual(fable51?.name, "Claude Fable 5.1");
-        }).pipe(
-          Effect.provide(
-            mockSpawnerLayer((args) => {
-              const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "2.1.257\n", stderr: "", code: 0 };
-              if (joined === "auth status")
-                return {
-                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
-                  stderr: "",
-                  code: 0,
-                };
-              throw new Error(`Unexpected args: ${joined}`);
-            }),
-          ),
-        ),
-      );
-
-      it.effect("hides Claude Fable 5.1 on older Claude Code versions", () =>
-        Effect.gen(function* () {
-          const status = yield* checkClaudeProviderStatus(
-            defaultClaudeSettings,
-            claudeCapabilities(),
-          );
-          assert.strictEqual(
-            status.models.some((model) => model.slug === "claude-fable-5-1"),
-            false,
-          );
-          assert.strictEqual(
-            status.message,
-            "Claude Code v2.1.256 is too old for Claude Fable 5.1. Upgrade to v2.1.257 or newer to access it.",
-          );
-        }).pipe(
-          Effect.provide(
-            mockSpawnerLayer((args) => {
-              const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "2.1.256\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',

@@ -34,6 +34,11 @@ When you set this field, T3 Code points Claude Code at that directory with the
 `CLAUDE_CONFIG_DIR` environment variable. It does not change `HOME`, so your system keychain and
 the rest of your environment stay as they are.
 
+## Model Availability
+
+T3 Code only shows models supported by the installed Claude Code version. Claude Fable 5.1 requires
+Claude Code 2.1.257 or newer.
+
 ## Reduce Context Usage
 
 In Settings, open your Claude provider and set **Auto-compact after** to a token count between
