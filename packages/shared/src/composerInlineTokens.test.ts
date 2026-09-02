@@ -41,6 +41,10 @@ describe("collectComposerInlineTokens", () => {
     });
   });
 
+  it.each(["$1", "$100"])("keeps numeric expression %s as plain text", (expression) => {
+    expect(collectComposerInlineTokens(`Use ${expression} now`)).toEqual([]);
+  });
+
   it("does not convert incomplete trailing tokens", () => {
     expect(collectComposerInlineTokens("Use $ui")).toEqual([]);
     expect(collectComposerInlineTokens("Inspect @AGENTS.md")).toEqual([]);
