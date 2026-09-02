@@ -1797,6 +1797,61 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("keeps async assistant messages separate from the streaming commentary item", async () => {
+    const harness = await createHarness();
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-async-message"),
+    };
+    const completeAssistant = (eventId: string, itemId: string, detail: string) =>
+      ({
+        ...base,
+        type: "item.completed",
+        eventId: asEventId(eventId),
+        itemId: asItemId(itemId),
+        payload: { itemType: "assistant_message", status: "completed", detail },
+      }) as const;
+    const commentaryDelta = (eventId: string, delta: string) =>
+      ({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId(eventId),
+        itemId: asItemId("commentary"),
+        payload: { streamKind: "assistant_text", delta },
+      }) as const;
+
+    await harness.emitAndDrain([
+      commentaryDelta("evt-commentary-1", "Working on it."),
+      completeAssistant("evt-async-1", "async-message-1", "Still investigating."),
+      completeAssistant("evt-async-2", "async-message-2", "Found the cause."),
+      commentaryDelta("evt-commentary-2", " Applying the fix."),
+      completeAssistant(
+        "evt-commentary-completed",
+        "commentary",
+        "Working on it. Applying the fix.",
+      ),
+    ]);
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    );
+    const assistantMessages = (thread?.messages ?? []).filter(
+      (message) => message.role === "assistant",
+    );
+    expect(
+      assistantMessages.map((message) => ({ text: message.text, streaming: message.streaming })),
+    ).toEqual(
+      expect.arrayContaining([
+        { text: "Working on it. Applying the fix.", streaming: false },
+        { text: "Still investigating.", streaming: false },
+        { text: "Found the cause.", streaming: false },
+      ]),
+    );
+    expect(assistantMessages).toHaveLength(3);
+  });
+
   it("preserves completed tool metadata on projected tool activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

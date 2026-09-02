@@ -2281,9 +2281,16 @@ const make = Effect.gen(function* () {
             role: "reasoning",
           });
         }
-        const activeAssistantMessageId = turnId
-          ? yield* getActiveAssistantMessageIdForTurn(thread.id, turnId)
-          : Option.none<MessageId>();
+        const activeAssistantSegment = turnId
+          ? yield* getAssistantSegmentStateForTurn(thread.id, turnId)
+          : Option.none<AssistantSegmentState>();
+        const completingAssistantSegment = Option.filter(
+          activeAssistantSegment,
+          (segment) => segment.baseKey === assistantSegmentBaseKeyFromEvent(event),
+        );
+        const activeAssistantMessageId = Option.flatMap(completingAssistantSegment, (segment) =>
+          segment.activeMessageId ? Option.some(segment.activeMessageId) : Option.none(),
+        );
         const assistantMessageId = Option.getOrElse(
           activeAssistantMessageId,
           () => assistantCompletion.messageId,
@@ -2331,7 +2338,7 @@ const make = Effect.gen(function* () {
           }
         }
 
-        if (turnId) {
+        if (turnId && Option.isSome(completingAssistantSegment)) {
           yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
         }
       }
