@@ -209,18 +209,18 @@ describe("nativeMarkdownDocumentRuns", () => {
       children: [
         {
           type: "paragraph",
-          children: [{ type: "text", content: "Use $ui for this." }],
+          children: [{ type: "text", content: "Use $2spec for this." }],
         },
       ],
     };
 
-    expect(nativeMarkdownDocumentRuns(node, [{ name: "ui", displayName: "UI" }])).toEqual([
+    expect(nativeMarkdownDocumentRuns(node, [{ name: "2spec", displayName: "2Spec" }])).toEqual([
       { text: "Use ", role: "body" },
       {
-        text: "$ui",
+        text: "$2spec",
         role: "body",
-        skillName: "ui",
-        skillLabel: "UI",
+        skillName: "2spec",
+        skillLabel: "2Spec",
       },
       { text: " for this.", role: "body" },
     ]);
