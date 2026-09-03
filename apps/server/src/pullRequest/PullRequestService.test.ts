@@ -3172,6 +3172,75 @@ it.effect("shares linked summaries and reuses them for display without asking th
   }),
 );
 
+it.effect("reads a linked pull request URL from a non-Git project", () =>
+  Effect.gen(function* () {
+    const requests: Array<{
+      readonly cwd: string;
+      readonly host: string;
+      readonly repository: string;
+      readonly number: number;
+    }> = [];
+    const service = yield* makeService({
+      projects: [project({ id: "parent", title: "work", workspaceRoot: "/work" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: (input) => {
+            requests.push(input);
+            return Effect.succeed(changeRequest(9435, "2026-09-03T00:00:00Z"));
+          },
+        }),
+      ],
+    });
+
+    const summary = yield* service.summary({
+      projectId: "parent" as ProjectId,
+      repository: "pingdotgg/t3code",
+      number: 9435,
+      url: "https://github.com/pingdotgg/t3code/pull/9435",
+    });
+
+    assert.deepStrictEqual(requests, [
+      {
+        cwd: "/work",
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 9435,
+      },
+    ]);
+    assert.strictEqual(summary.projectId, "parent");
+    assert.strictEqual(summary.number, 9435);
+  }),
+);
+
+it.effect("refuses a URL-only summary whose repository does not match the URL", () =>
+  Effect.gen(function* () {
+    let calls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "parent", title: "work", workspaceRoot: "/work" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: () => {
+            calls += 1;
+            return Effect.succeed(changeRequest(9435, "2026-09-03T00:00:00Z"));
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.summary({
+        projectId: "parent" as ProjectId,
+        repository: "other/repository",
+        number: 9435,
+        url: "https://github.com/pingdotgg/t3code/pull/9435",
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(calls, 0);
+  }),
+);
+
 it.effect("answers a known pull request immediately while the host refreshes", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
