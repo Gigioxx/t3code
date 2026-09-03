@@ -3118,6 +3118,10 @@ it.effect("shares linked summaries and reuses them for display without asking th
     let calls = 0;
     let failing = false;
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const linkedReference = {
+      ...reference,
+      url: "https://github.com/acme/web/pull/1",
+    };
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
@@ -3147,8 +3151,8 @@ it.effect("shares linked summaries and reuses them for display without asking th
 
     yield* Effect.all(
       [
-        service.summary(reference, { recoverTransientFailure: false }),
-        service.summary(reference, { recoverTransientFailure: false }),
+        service.summary(linkedReference, { recoverTransientFailure: false }),
+        service.summary(linkedReference, { recoverTransientFailure: false }),
       ],
       { concurrency: "unbounded" },
     );
@@ -3157,7 +3161,7 @@ it.effect("shares linked summaries and reuses them for display without asking th
     yield* TestClock.adjust("61 seconds");
     failing = true;
     const strict = yield* Effect.flip(
-      service.summary(reference, { recoverTransientFailure: false }),
+      service.summary(linkedReference, { recoverTransientFailure: false }),
     );
     assert.strictEqual(strict._tag, "PullRequestOperationError");
 
@@ -3209,6 +3213,48 @@ it.effect("reads a linked pull request URL from a non-Git project", () =>
     ]);
     assert.strictEqual(summary.projectId, "parent");
     assert.strictEqual(summary.number, 9435);
+  }),
+);
+
+it.effect("does not use providers that cannot resolve URL-only summary hosts", () =>
+  Effect.gen(function* () {
+    for (const testCase of [
+      {
+        provider: "gitlab" as const,
+        repository: "pingdotgg/t3code",
+        url: "https://gitlab.com/pingdotgg/t3code/-/merge_requests/9435",
+      },
+      {
+        provider: "azure-devops" as const,
+        repository: "pingdotgg/t3code/_git/t3code",
+        url: "https://dev.azure.com/pingdotgg/t3code/_git/t3code/pullrequest/9435",
+      },
+      {
+        provider: "bitbucket" as const,
+        repository: "pingdotgg/t3code",
+        url: "https://bitbucket.acme.test/pingdotgg/t3code/pull-requests/9435",
+      },
+    ]) {
+      const service = yield* makeService({
+        projects: [project({ id: "parent", title: "work", workspaceRoot: "/work" })],
+        providers: [
+          fakeProvider(testCase.provider, {
+            getChangeRequest: () => Effect.die("unsupported URL-only provider was called"),
+          }),
+        ],
+      });
+
+      const error = yield* Effect.flip(
+        service.summary({
+          projectId: "parent" as ProjectId,
+          repository: testCase.repository,
+          number: 9435,
+          url: testCase.url,
+        }),
+      );
+
+      assert.strictEqual(error._tag, "PullRequestUnavailableError");
+    }
   }),
 );
 

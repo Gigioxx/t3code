@@ -6,7 +6,11 @@ import type {
   ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { parseChangeRequestUrl, type ChangeRequestLink } from "@t3tools/shared/sourceControl";
+import {
+  canReadChangeRequestSummaryWithoutCheckout,
+  parseChangeRequestUrl,
+  type ChangeRequestLink,
+} from "@t3tools/shared/sourceControl";
 import * as Schema from "effect/Schema";
 import { type MouseEvent, useCallback } from "react";
 
@@ -171,7 +175,12 @@ export function resolveThreadPullRequestLink(
   const matchedProject = findProjectForChangeRequest(projects, parsed);
   const project = matchedProject ?? projects.find((candidate) => candidate.id === threadProjectId);
   if (project === undefined || (matchedProject === undefined && !allowUrlOnly)) return null;
-  if (matchedProject === undefined && project.repositoryIdentity != null) return null;
+  if (
+    matchedProject === undefined &&
+    (project.repositoryIdentity != null || !canReadChangeRequestSummaryWithoutCheckout(parsed))
+  ) {
+    return null;
+  }
   return {
     projectId: project.id,
     repository: matchedProject?.repositoryIdentity?.displayName ?? parsed.repository,

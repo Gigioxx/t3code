@@ -216,6 +216,12 @@ describe("parseChangeRequestUrl", () => {
       number: 7,
       provider: "github",
     });
+    expect(parseChangeRequestUrl("https://github.acme.test:8443/platform/api/pull/7")).toEqual({
+      host: "github.acme.test:8443",
+      repository: "platform/api",
+      number: 7,
+      provider: "github",
+    });
   });
 
   it("reads a GitLab merge request, nested groups and all", () => {
@@ -352,6 +358,14 @@ describe("resolveThreadPullRequestLink", () => {
         false,
       ),
     ).toBeNull();
+  });
+
+  it.each([
+    "https://gitlab.com/pingdotgg/t3code/-/merge_requests/9435",
+    "https://dev.azure.com/pingdotgg/t3code/_git/t3code/pullrequest/9435",
+    "https://bitbucket.acme.test/pingdotgg/t3code/pull-requests/9435",
+  ])("does not offer URL-only linking when the provider cannot resolve the host", (url) => {
+    expect(resolveThreadPullRequestLink([parentProject], parentProjectId, url, true)).toBeNull();
   });
 });
 

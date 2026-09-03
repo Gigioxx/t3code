@@ -55,6 +55,7 @@ import {
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
 import {
+  canReadChangeRequestSummaryWithoutCheckout,
   detectSourceControlProviderFromRemoteUrl,
   parseChangeRequestUrl,
 } from "@t3tools/shared/sourceControl";
@@ -700,7 +701,9 @@ export const make = Effect.gen(function* () {
                   }),
                 );
               }
-              const api = registry.get(parsed.provider);
+              const api = canReadChangeRequestSummaryWithoutCheckout(parsed)
+                ? registry.get(parsed.provider)
+                : null;
               if (api !== null) {
                 return Effect.succeed({
                   project: selectedProject,
@@ -2224,8 +2227,8 @@ export const make = Effect.gen(function* () {
     },
   );
   const summary: PullRequestService["Service"]["summary"] = (input, options) => {
-    const key = summaryCacheKey(input);
-    const cached = Cache.get(summaryCache, key);
+    const key = refCacheKey(input);
+    const cached = Cache.get(summaryCache, summaryCacheKey(input));
     if (options?.recoverTransientFailure !== false) {
       return lastGoodSummary.serveHeld(key, cached, "reuse");
     }
