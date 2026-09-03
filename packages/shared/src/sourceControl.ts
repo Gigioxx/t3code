@@ -29,7 +29,8 @@ export interface ParsedChangeRequestLink extends ChangeRequestLink {
 /** Providers whose linked-thread summary can be read without repository checkout context. */
 export function canReadChangeRequestSummaryWithoutCheckout(link: ParsedChangeRequestLink): boolean {
   return (
-    link.provider === "github" || (link.provider === "bitbucket" && link.host === "bitbucket.org")
+    (link.provider === "github" && link.host === "github.com") ||
+    (link.provider === "bitbucket" && link.host === "bitbucket.org")
   );
 }
 
@@ -59,22 +60,21 @@ export function parseChangeRequestUrl(targetUrl: string): ParsedChangeRequestLin
     return null;
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  const hostname = url.hostname.toLowerCase();
-  const host = url.host.toLowerCase();
+  const host = url.hostname.toLowerCase();
 
-  if (isHostOf(hostname, "github.com", "github")) {
+  if (isHostOf(host, "github.com", "github")) {
     return claim(host, "github", /^\/([^/]+\/[^/]+)\/pull\/(\d+)(?:\/|$)/u.exec(url.pathname));
   }
   const gitlab = /^\/([^/]+(?:\/[^/]+)+)\/-\/merge_requests\/(\d+)(?:\/|$)/u.exec(url.pathname);
   if (gitlab) return claim(host, "gitlab", gitlab);
-  if (isHostOf(hostname, "bitbucket.org", "bitbucket")) {
+  if (isHostOf(host, "bitbucket.org", "bitbucket")) {
     return claim(
       host,
       "bitbucket",
       /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:\/|$)/u.exec(url.pathname),
     );
   }
-  if (isHostOf(hostname, "dev.azure.com") || hostname.endsWith(".visualstudio.com")) {
+  if (isHostOf(host, "dev.azure.com") || host.endsWith(".visualstudio.com")) {
     return claim(
       host,
       "azure-devops",

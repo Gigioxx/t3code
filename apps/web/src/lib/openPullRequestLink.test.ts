@@ -217,7 +217,7 @@ describe("parseChangeRequestUrl", () => {
       provider: "github",
     });
     expect(parseChangeRequestUrl("https://github.acme.test:8443/platform/api/pull/7")).toEqual({
-      host: "github.acme.test:8443",
+      host: "github.acme.test",
       repository: "platform/api",
       number: 7,
       provider: "github",
@@ -364,6 +364,7 @@ describe("resolveThreadPullRequestLink", () => {
     "https://gitlab.com/pingdotgg/t3code/-/merge_requests/9435",
     "https://dev.azure.com/pingdotgg/t3code/_git/t3code/pullrequest/9435",
     "https://bitbucket.acme.test/pingdotgg/t3code/pull-requests/9435",
+    "https://github.acme.test/pingdotgg/t3code/pull/9435",
   ])("does not offer URL-only linking when the provider cannot resolve the host", (url) => {
     expect(resolveThreadPullRequestLink([parentProject], parentProjectId, url, true)).toBeNull();
   });
@@ -372,6 +373,18 @@ describe("resolveThreadPullRequestLink", () => {
 describe("findProjectForChangeRequest", () => {
   const project = (identity: Record<string, unknown>) =>
     ({ id: "p1", repositoryIdentity: identity }) as never;
+
+  it("matches a custom-port link by its canonical hostname", () => {
+    const candidate = project({
+      canonicalKey: "github.acme.test/platform/api",
+      provider: "github",
+      displayName: "platform/api",
+    });
+    const link = parseChangeRequestUrl("https://github.acme.test:8443/platform/api/pull/7");
+
+    if (link === null) throw new Error("expected a GitHub Enterprise pull request");
+    expect(findProjectForChangeRequest([candidate], link)).toBe(candidate);
+  });
 
   it("matches a nested GitLab group by the whole path below the host", () => {
     // The server identifies a repository by `displayName`, which keeps every group segment; the

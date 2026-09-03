@@ -2227,8 +2227,8 @@ export const make = Effect.gen(function* () {
     },
   );
   const summary: PullRequestService["Service"]["summary"] = (input, options) => {
-    const key = refCacheKey(input);
-    const cached = Cache.get(summaryCache, summaryCacheKey(input));
+    const key = summaryCacheKey(input);
+    const cached = Cache.get(summaryCache, key);
     if (options?.recoverTransientFailure !== false) {
       return lastGoodSummary.serveHeld(key, cached, "reuse");
     }

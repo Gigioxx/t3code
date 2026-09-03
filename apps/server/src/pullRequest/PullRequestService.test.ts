@@ -3118,10 +3118,6 @@ it.effect("shares linked summaries and reuses them for display without asking th
     let calls = 0;
     let failing = false;
     const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
-    const linkedReference = {
-      ...reference,
-      url: "https://github.com/acme/web/pull/1",
-    };
     const service = yield* makeService({
       projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
       providers: [
@@ -3151,8 +3147,8 @@ it.effect("shares linked summaries and reuses them for display without asking th
 
     yield* Effect.all(
       [
-        service.summary(linkedReference, { recoverTransientFailure: false }),
-        service.summary(linkedReference, { recoverTransientFailure: false }),
+        service.summary(reference, { recoverTransientFailure: false }),
+        service.summary(reference, { recoverTransientFailure: false }),
       ],
       { concurrency: "unbounded" },
     );
@@ -3161,7 +3157,7 @@ it.effect("shares linked summaries and reuses them for display without asking th
     yield* TestClock.adjust("61 seconds");
     failing = true;
     const strict = yield* Effect.flip(
-      service.summary(linkedReference, { recoverTransientFailure: false }),
+      service.summary(reference, { recoverTransientFailure: false }),
     );
     assert.strictEqual(strict._tag, "PullRequestOperationError");
 
@@ -3216,6 +3212,43 @@ it.effect("reads a linked pull request URL from a non-Git project", () =>
   }),
 );
 
+it.effect("keeps URL-only summaries on different hosts separate", () =>
+  Effect.gen(function* () {
+    let githubCalls = 0;
+    let bitbucketCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "parent", title: "work", workspaceRoot: "/work" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestSummary: () => {
+            githubCalls += 1;
+            return Effect.succeed(changeRequest(7, "2026-09-03T00:00:00Z"));
+          },
+        }),
+        fakeProvider("bitbucket", {
+          getChangeRequestSummary: () => {
+            bitbucketCalls += 1;
+            return Effect.succeed(changeRequest(7, "2026-09-03T00:00:00Z"));
+          },
+        }),
+      ],
+    });
+    const reference = {
+      projectId: "parent" as ProjectId,
+      repository: "acme/web",
+      number: 7,
+    };
+
+    yield* service.summary({ ...reference, url: "https://github.com/acme/web/pull/7" });
+    yield* service.summary({
+      ...reference,
+      url: "https://bitbucket.org/acme/web/pull-requests/7",
+    });
+
+    assert.deepStrictEqual([githubCalls, bitbucketCalls], [1, 1]);
+  }),
+);
+
 it.effect("does not use providers that cannot resolve URL-only summary hosts", () =>
   Effect.gen(function* () {
     for (const testCase of [
@@ -3233,6 +3266,11 @@ it.effect("does not use providers that cannot resolve URL-only summary hosts", (
         provider: "bitbucket" as const,
         repository: "pingdotgg/t3code",
         url: "https://bitbucket.acme.test/pingdotgg/t3code/pull-requests/9435",
+      },
+      {
+        provider: "github" as const,
+        repository: "pingdotgg/t3code",
+        url: "https://github.acme.test/pingdotgg/t3code/pull/9435",
       },
     ]) {
       const service = yield* makeService({
