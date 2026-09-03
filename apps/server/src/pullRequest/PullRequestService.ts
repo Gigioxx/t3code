@@ -2179,6 +2179,27 @@ export const make = Effect.gen(function* () {
     ref.url === undefined
       ? refCacheKey(ref)
       : JSON.stringify([refEpoch(ref), ref.projectId, ref.repository, ref.number, ref.url]);
+  const heldSummaryCacheKey = (ref: PullRequestRef) => {
+    if (ref.url === undefined) return refCacheKey(ref);
+    const parsed = parseChangeRequestUrl(ref.url);
+    return parsed === null
+      ? summaryCacheKey(ref)
+      : JSON.stringify([
+          refEpoch(ref),
+          ref.projectId,
+          ref.repository,
+          ref.number,
+          parsed.provider,
+          parsed.host,
+        ]);
+  };
+  const recordHeldSummary = (key: string, next: PullRequestSummary) => {
+    const current = lastGoodSummary.peek(key);
+    if (current?.state === "merged" && next.state !== "merged") return Effect.void;
+    return current === undefined || next.updatedAt >= current.updatedAt
+      ? lastGoodSummary.record(key, next)
+      : Effect.void;
+  };
   const bumpRefEpoch = (ref: PullRequestRef) => {
     const scope = refScope(ref);
     if (!refEpochs.has(scope) && refEpochs.size >= REF_EPOCH_CAPACITY) {
@@ -2227,8 +2248,15 @@ export const make = Effect.gen(function* () {
     },
   );
   const summary: PullRequestService["Service"]["summary"] = (input, options) => {
-    const key = summaryCacheKey(input);
-    const cached = Cache.get(summaryCache, key);
+    const cacheKey = summaryCacheKey(input);
+    const key = heldSummaryCacheKey(input);
+    const cached = Cache.get(summaryCache, cacheKey).pipe(
+      Effect.tap((value) =>
+        input.url === undefined
+          ? recordHeldSummary(heldSummaryCacheKey({ ...input, url: value.url }), value)
+          : Effect.void,
+      ),
+    );
     if (options?.recoverTransientFailure !== false) {
       return lastGoodSummary.serveHeld(key, cached, "reuse");
     }
@@ -2337,12 +2365,6 @@ export const make = Effect.gen(function* () {
     baseBranch: detail.baseBranch,
     updatedAt: detail.updatedAt,
   });
-  const shouldReplaceHeldSummary = (key: string, next: PullRequestSummary) => {
-    const current = lastGoodSummary.peek(key);
-    if (current === undefined) return true;
-    if (current.state === "merged" && next.state !== "merged") return false;
-    return next.updatedAt >= current.updatedAt;
-  };
   const detail: PullRequestService["Service"]["detail"] = (input) => {
     const key = refCacheKey(input);
     // Record the summary from a host or cache read, not the stale value
@@ -2354,9 +2376,13 @@ export const make = Effect.gen(function* () {
       Cache.get(detailCache, key).pipe(
         Effect.tap((value) => {
           const summary = summaryFromDetail(value);
-          return shouldReplaceHeldSummary(key, summary)
-            ? lastGoodSummary.record(key, summary)
-            : Effect.void;
+          return Effect.all(
+            [
+              recordHeldSummary(key, summary),
+              recordHeldSummary(heldSummaryCacheKey({ ...input, url: summary.url }), summary),
+            ],
+            { discard: true },
+          );
         }),
       ),
       "revalidate",

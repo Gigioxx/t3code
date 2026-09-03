@@ -3409,6 +3409,43 @@ it.effect("reuses an observed merged state for strict settlement reads", () =>
   }),
 );
 
+it.effect("shares detail updates with a registered project's linked summary", () =>
+  Effect.gen(function* () {
+    let summaryCalls = 0;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const linkedReference = {
+      ...reference,
+      url: "https://github.com/acme/web/pull/1",
+    };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            Effect.succeed({
+              ...hostedChangeRequest("merged body", 4),
+              url: linkedReference.url,
+              state: "merged",
+              updatedAt: "2026-07-03T00:00:00Z",
+            }),
+          getChangeRequestSummary: () => {
+            summaryCalls += 1;
+            return Effect.succeed({
+              ...changeRequest(1, "2026-07-02T00:00:00Z"),
+              url: linkedReference.url,
+            });
+          },
+        }),
+      ],
+    });
+
+    assert.strictEqual((yield* service.summary(linkedReference)).state, "open");
+    yield* service.detail(reference);
+    assert.strictEqual((yield* service.summary(linkedReference)).state, "merged");
+    assert.strictEqual(summaryCalls, 1);
+  }),
+);
+
 it.effect("does not let a stale detail reopen overwrite a fresher linked summary", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
