@@ -1,9 +1,44 @@
 import { EnvironmentId } from "@t3tools/contracts";
+import { act, type ComponentProps, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { create, type ReactTestRenderer } from "react-test-renderer";
+import ReactMarkdown from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 import { describe, expect, it, vi } from "vite-plus/test";
+
+import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+import { remarkNormalizeListItemIndentation } from "../markdown-list-indentation";
+import { Button } from "./ui/button";
+import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("../hooks/useSettings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../hooks/useSettings")>();
+  const settings = actual.getClientSettings();
+  return {
+    ...actual,
+    useClientSettings: (select?: (value: typeof settings) => unknown) =>
+      select ? select(settings) : settings,
+  };
+});
+vi.mock("./ui/tooltip", async () => {
+  const { cloneElement, isValidElement } = await import("react");
+  return {
+    Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+    TooltipTrigger({
+      render,
+      children,
+    }: ComponentProps<typeof import("./ui/tooltip").TooltipTrigger>) {
+      if (!isValidElement(render)) return <>{children}</>;
+      return children === undefined ? render : cloneElement(render, undefined, children);
+    },
+    TooltipPopup: () => null,
+  };
+});
 vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../state/session", async (importOriginal) => ({
@@ -32,8 +67,225 @@ import ChatMarkdown, {
   canUseMarkdownFileShellActions,
   hasMarkdownFilePrimaryAction,
   orderedListGutterStyle,
+  sourceOrderedListItemValue,
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./ChatMarkdown";
+
+function codeButton(renderer: ReactTestRenderer, label: string) {
+  const button = renderer.root
+    .findAllByType(Button)
+    .find((instance) => instance.props["aria-label"] === label);
+  if (!button) throw new Error(`Missing code button: ${label}`);
+  return button.props as ComponentProps<typeof Button>;
+}
+
+describe("ChatMarkdown favicon privacy", () => {
+  it("suppresses private link images while preserving public links across updates", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    const markdown = (url: string) => <ChatMarkdown cwd="/tmp/project" text={`[Link](${url})`} />;
+    try {
+      await act(async () => {
+        renderer = create(markdown("https://github.com"));
+      });
+      expect(renderer!.root.findAllByType("img").map((image) => image.props.src)).toEqual([
+        "https://www.google.com/s2/favicons?domain=github.com&sz=32",
+      ]);
+      for (const url of ["http://192.168.1.10:8080", "http://localhost:3000", "http://home.arpa"]) {
+        await act(async () => {
+          renderer!.update(markdown(url));
+        });
+        expect(renderer!.root.findAllByType("img")).toHaveLength(0);
+      }
+      await act(async () => {
+        renderer!.update(markdown("https://github.com"));
+      });
+      expect(renderer!.root.findAllByType("img")).toHaveLength(1);
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("ChatMarkdown streaming", () => {
+  it("recovers highlighting after a failed fence changes without resetting its controls", async () => {
+    const highlighter = await getSyntaxHighlighterPromise("text");
+    const codeToHtml = highlighter.codeToHtml.bind(highlighter);
+    let fail = true;
+    vi.spyOn(highlighter, "codeToHtml").mockImplementation((...args) => {
+      if (fail) throw new Error("Temporary highlighter failure");
+      return codeToHtml(...args);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+
+    try {
+      await act(async () => {
+        renderer = create(
+          <ChatMarkdown cwd="/tmp/project" text={"```text\ninitial\n```"} isStreaming />,
+        );
+      });
+      const mounted = renderer!;
+      const codeBlock = mounted.root.findByProps({ "data-language": "text" });
+      const initialWrap = codeBlock.props["data-wrap"] === "true";
+      const wrap = codeButton(mounted, initialWrap ? "Disable line wrap" : "Wrap lines");
+      await act(async () => {
+        wrap.onClick?.({} as Parameters<NonNullable<typeof wrap.onClick>>[0]);
+      });
+      expect(mounted.root.findAllByProps({ className: "chat-markdown-shiki" })).toHaveLength(0);
+
+      fail = false;
+      await act(async () => {
+        mounted.update(
+          <ChatMarkdown cwd="/tmp/project" text={"```text\nrecovered\n```"} isStreaming />,
+        );
+      });
+      expect(mounted.root.findAllByProps({ className: "chat-markdown-shiki" })).toHaveLength(1);
+      expect(mounted.root.findByProps({ "data-language": "text" })).toBe(codeBlock);
+      expect(codeBlock.props["data-wrap"]).toBe(String(!initialWrap));
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("preserves code controls and details without highlighting an unchanged fence again", async () => {
+    const highlighter = await getSyntaxHighlighterPromise("text");
+    const highlight = vi.spyOn(highlighter, "codeToHtml");
+    const writeText = vi.fn(async (_text: string) => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let renderer: ReactTestRenderer | undefined;
+    const text = [
+      "```text",
+      "First code block",
+      "```",
+      "",
+      "<details><summary>More</summary>",
+      "",
+      "Details content",
+      "",
+      "</details>",
+      "",
+      "Streaming reply",
+    ].join("\n");
+
+    try {
+      await act(async () => {
+        renderer = create(<ChatMarkdown cwd="/tmp/project" text={text} isStreaming />);
+      });
+      const mounted = renderer!;
+      const codeBlock = mounted.root.findByProps({ "data-language": "text" });
+      const initialWrap = codeBlock.props["data-wrap"] === "true";
+      const wrap = codeButton(mounted, initialWrap ? "Disable line wrap" : "Wrap lines");
+      const copy = codeButton(mounted, "Copy code");
+      await act(async () => {
+        wrap.onClick?.({} as Parameters<NonNullable<typeof wrap.onClick>>[0]);
+        copy.onClick?.({} as Parameters<NonNullable<typeof copy.onClick>>[0]);
+      });
+
+      const detailsButton = mounted.root.find(
+        (instance) =>
+          instance.type === "button" && instance.props["data-markdown-details-summary"] === "",
+      );
+      await act(async () => {
+        detailsButton.props.onClick({ nativeEvent: new Event("click") });
+      });
+      const details = mounted.root.findByProps({ "data-markdown-details": "" });
+      expect(details.props["data-markdown-details-open"]).toBe("true");
+      expect(writeText).toHaveBeenCalledWith("First code block\n");
+      expect(highlight).toHaveBeenCalledTimes(1);
+
+      for (let index = 0; index < 10; index += 1) {
+        await act(async () => {
+          mounted.update(<ChatMarkdown cwd="/tmp/project" text={`${text} ${index}`} isStreaming />);
+        });
+      }
+
+      expect(highlight).toHaveBeenCalledTimes(1);
+      expect(mounted.root.findByProps({ "data-language": "text" })).toBe(codeBlock);
+      expect(codeBlock.props["data-wrap"]).toBe(String(!initialWrap));
+      expect(mounted.root.findByProps({ "data-markdown-details": "" })).toBe(details);
+      expect(details.props["data-markdown-details-open"]).toBe("true");
+      await act(async () => {
+        mounted.update(
+          <ChatMarkdown
+            cwd="/tmp/project"
+            text={text.replace("First code block", "Updated code block")}
+            isStreaming
+          />,
+        );
+      });
+      const copyUpdated = codeButton(mounted, "Copied");
+      await act(async () => {
+        copyUpdated.onClick?.({} as Parameters<NonNullable<typeof copyUpdated.onClick>>[0]);
+      });
+      expect(writeText).toHaveBeenLastCalledWith("Updated code block\n");
+      expect(highlight).toHaveBeenCalledTimes(2);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("edits the current task text and marker after reusing a renderer", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    let editedText: string | undefined;
+    const message = (text: string) => (
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={text}
+        onTaskListChange={({ markerOffset, checked }) => {
+          editedText = setMarkdownTaskChecked(text, markerOffset, checked);
+          renderer!.update(message(editedText));
+        }}
+      />
+    );
+
+    try {
+      await act(async () => {
+        renderer = create(message("- [ ] First\n- [ ] Second"));
+      });
+      const mounted = renderer!;
+      const originalInput = mounted.root.findAllByType("input")[1]!;
+      await act(async () => {
+        mounted.update(message("- [ ] A longer first task\n- [ ] Second"));
+      });
+
+      const input = mounted.root.findAllByType("input")[1]!;
+      const listItem = mounted.root.findAllByType("li")[1]!;
+      const { onChange } = input.props as ComponentProps<"input">;
+      if (!onChange) throw new Error("Task checkbox has no edit handler");
+      await act(async () => {
+        onChange({
+          currentTarget: {
+            checked: true,
+            closest: () => ({
+              dataset: { taskMarkerOffset: String(listItem.props["data-task-marker-offset"]) },
+            }),
+          },
+        } as unknown as Parameters<typeof onChange>[0]);
+      });
+
+      expect(input).toBe(originalInput);
+      expect(editedText).toBe("- [ ] A longer first task\n- [x] Second");
+      expect(mounted.root.findAllByType("input")[1]!.props.checked).toBe(true);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe("canUseMarkdownFileShellActions", () => {
   const environmentId = EnvironmentId.make("environment-1");
@@ -92,6 +344,46 @@ describe("hasMarkdownFilePrimaryAction", () => {
   });
 });
 
+describe("ChatMarkdown skill chips", () => {
+  it("updates digit-leading skill labels when discovered skills change", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    const text = "Use $2spec with a $20k budget.";
+    try {
+      await act(async () => {
+        renderer = create(<ChatMarkdown cwd="/tmp/project" text={text} />);
+      });
+      const mounted = renderer!;
+      const labels = (label: string) =>
+        mounted.root.findAllByType("span").filter((node) => node.children.includes(label));
+      expect(labels("2Spec")).toHaveLength(0);
+
+      await act(async () => {
+        mounted.update(
+          <ChatMarkdown
+            cwd="/tmp/project"
+            text={text}
+            skills={[
+              { name: "2spec", displayName: "2Spec" },
+              { name: "20k", displayName: "MoneySkill" },
+            ]}
+          />,
+        );
+      });
+      expect(labels("2Spec")).toHaveLength(1);
+      expect(labels("MoneySkill")).toHaveLength(0);
+
+      await act(async () => {
+        mounted.update(<ChatMarkdown cwd="/tmp/project" text={text} skills={[]} />);
+      });
+      expect(labels("2Spec")).toHaveLength(0);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("ChatMarkdown file option chips", () => {
   it("keeps the fallback button text selectable", () => {
     const html = renderToStaticMarkup(
@@ -101,6 +393,214 @@ describe("ChatMarkdown file option chips", () => {
     expect(html).toContain("<button");
     expect(html).toContain('aria-haspopup="menu"');
     expect(html).toContain("select-text");
+  });
+
+  it.each([true, false])(
+    "renders Codex file citations as file chips with parseRawHtml=%s",
+    (parseRawHtml) => {
+      const html = renderToStaticMarkup(
+        <ChatMarkdown
+          cwd="/tmp/project"
+          text={
+            'Created :codex-file-citation{path="/tmp/project/outputs/report.xlsx" purpose="output"}.'
+          }
+          lineBreaks={!parseRawHtml}
+          parseRawHtml={parseRawHtml}
+        />,
+      );
+
+      expect(html).not.toContain("codex-file-citation");
+      expect(html).toContain("chat-markdown-file-link");
+      expect(html).toContain(
+        'data-markdown-copy="[report.xlsx](/tmp/project/outputs/report.xlsx)"',
+      );
+      expect(html).toContain("report.xlsx");
+    },
+  );
+
+  it("leaves an unfinished streaming citation visible until it is complete", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'Created :codex-file-citation{path="/tmp/project/outputs/report.xlsx"'}
+        isStreaming
+      />,
+    );
+
+    expect(html).toContain(":codex-file-citation");
+    expect(html).not.toContain("chat-markdown-file-link");
+  });
+
+  it("leaves malformed and similarly named file directives literal", () => {
+    for (const text of [
+      ':codex-file-citation{purpose="output"}',
+      ':codex-file-citation-extra{path="/tmp/project/outputs/report.xlsx"}',
+    ]) {
+      const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
+
+      expect(html).toContain(text.replaceAll('"', "&quot;"));
+      expect(html).not.toContain("chat-markdown-file-link");
+    }
+  });
+
+  it("preserves Codex file citation examples inside code", () => {
+    const directive = ':codex-file-citation{path="/tmp/project/outputs/report.xlsx"}';
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={`Example: \`${directive}\`\n\n\`\`\`text\n${directive}\n\`\`\``}
+      />,
+    );
+
+    expect(html.match(/:codex-file-citation/g)).toHaveLength(2);
+    expect(html).not.toContain("chat-markdown-file-link");
+  });
+
+  it("preserves escaped Codex file citations as literal text", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'Example: \\:codex-file-citation{path="/tmp/project/outputs/report.xlsx"}'}
+      />,
+    );
+
+    expect(html).toContain(":codex-file-citation");
+    expect(html).not.toContain("chat-markdown-file-link");
+  });
+
+  it("does not create a nested link for citations inside link text", () => {
+    const directive = ':codex-file-citation{path="/tmp/project/outputs/report.xlsx"}';
+    const html = renderToStaticMarkup(
+      <ChatMarkdown cwd="/tmp/project" text={`[See ${directive}](https://example.com)`} />,
+    );
+    const renderedText = html.replace(/<[^>]+>/g, "");
+
+    expect(renderedText).toContain("codex-file-citation");
+    expect(html).not.toContain("chat-markdown-file-link");
+  });
+
+  it("renders file citations created by over-indented list recovery", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'-       Created :codex-file-citation{path="/tmp/project/outputs/report.xlsx"}'}
+      />,
+    );
+
+    expect(html).not.toContain("<pre>");
+    expect(html).toContain("Created ");
+    expect(html).toContain("chat-markdown-file-link");
+    expect(html).toContain("report.xlsx");
+  });
+
+  it("disambiguates Codex citations with the same basename", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={
+          'Changed :codex-file-citation{path="/tmp/project/src/index.ts"} and :codex-file-citation{path="/tmp/project/test/index.ts"}.'
+        }
+      />,
+    );
+
+    expect(html).toContain("index.ts · project/src");
+    expect(html).toContain("index.ts · project/test");
+  });
+
+  it("preserves rejected citations created by over-indented list recovery", () => {
+    const malformedHtml = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={'Leading text before list.\n\n-       Bad :codex-file-citation{purpose="output"}'}
+      />,
+    );
+    const nestedLinkHtml = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={
+          'Leading text before list.\n\n-       [Bad :codex-file-citation{path="/tmp/project/report.xlsx"}](https://example.com)'
+        }
+      />,
+    );
+    const nestedLinkText = nestedLinkHtml.replace(/<[^>]+>/g, "");
+
+    expect(malformedHtml).toContain(
+      "<li>Bad :codex-file-citation{purpose=&quot;output&quot;}</li>",
+    );
+    expect(nestedLinkText).toContain(
+      "Bad :codex-file-citation{path=&quot;/tmp/project/report.xlsx&quot;}",
+    );
+  });
+});
+
+const ARTIFACT_TEMPLATE_DIRECTIVE =
+  '::artifact-template{skill_name="artifact-template-hello-world" skill_directory="/Users/test/.codex/skills/artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}';
+
+describe("ChatMarkdown artifact-template cards", () => {
+  it.each([true, false])("renders the Codex result card with parseRawHtml=%s", (parseRawHtml) => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={ARTIFACT_TEMPLATE_DIRECTIVE}
+        parseRawHtml={parseRawHtml}
+        onUseArtifactTemplate={() => undefined}
+      />,
+    );
+
+    expect(html).not.toContain("::artifact-template");
+    expect(html).toContain("chat-markdown-artifact-template");
+    expect(html).toContain('data-artifact-kind="document"');
+    expect(html).toContain('data-markdown-copy="Hello World (Document template)\n\n"');
+    expect(html).toContain('data-skill-name="artifact-template-hello-world"');
+    expect(html).toContain("Hello World");
+    expect(html).toContain("Document template");
+    expect(html).toContain("Use template");
+    expect(html).not.toContain("<p><div");
+  });
+
+  it("renders a passive card outside a composer-backed timeline", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown cwd="/tmp/project" text={ARTIFACT_TEMPLATE_DIRECTIVE} />,
+    );
+
+    expect(html).toContain("chat-markdown-artifact-template");
+    expect(html).not.toContain("Use template");
+  });
+
+  it("leaves malformed and unfinished artifact-template directives literal", () => {
+    const malformed =
+      '::artifact-template{skill_name="artifact-template-hello-world" display_name="Hello World" artifact_kind="document"}';
+    const unfinished = ARTIFACT_TEMPLATE_DIRECTIVE.slice(0, -1);
+
+    for (const text of [malformed, unfinished]) {
+      const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
+      expect(html).toContain("::artifact-template");
+      expect(html).not.toContain("chat-markdown-artifact-template");
+    }
+  });
+
+  it("leaves escaped and similarly named artifact-template directives literal", () => {
+    for (const text of [
+      `\\${ARTIFACT_TEMPLATE_DIRECTIVE}`,
+      ARTIFACT_TEMPLATE_DIRECTIVE.replace("::artifact-template", "::artifact-template-extra"),
+    ]) {
+      const html = renderToStaticMarkup(<ChatMarkdown cwd="/tmp/project" text={text} />);
+
+      expect(html).toContain("::artifact-template");
+      expect(html).not.toContain("chat-markdown-artifact-template");
+    }
+  });
+
+  it("preserves artifact-template examples inside code", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={`\`${ARTIFACT_TEMPLATE_DIRECTIVE}\`\n\n\`\`\`text\n${ARTIFACT_TEMPLATE_DIRECTIVE}\n\`\`\``}
+      />,
+    );
+
+    expect(html.match(/::artifact-template/g)).toHaveLength(2);
+    expect(html).not.toContain("chat-markdown-artifact-template");
   });
 });
 
@@ -152,13 +652,13 @@ describe("orderedListGutterStyle", () => {
     expect(orderedListGutterStyle(9, undefined)).toBeUndefined();
   });
 
-  it("leaves the default gutter alone for two-digit lists", () => {
-    expect(orderedListGutterStyle(99, undefined)).toBeUndefined();
+  it("widens the gutter for two-digit lists", () => {
+    expect(orderedListGutterStyle(99, undefined)).toEqual({ "--list-gutter": "3ch" });
   });
 
-  it("leaves the default gutter alone for a two-digit list that starts above 1", () => {
+  it("widens the gutter for a two-digit list that starts above 1", () => {
     // start=50 + 49 items => last marker is "98", still two digits.
-    expect(orderedListGutterStyle(49, 50)).toBeUndefined();
+    expect(orderedListGutterStyle(49, 50)).toEqual({ "--list-gutter": "3ch" });
   });
 
   it("widens the gutter once the last marker reaches three digits", () => {
@@ -179,74 +679,104 @@ describe("orderedListGutterStyle", () => {
   it("uses the widest marker and includes a negative start's minus sign", () => {
     expect(orderedListGutterStyle(1001, -1000)).toEqual({ "--list-gutter": "6ch" });
     expect(orderedListGutterStyle(3, -15)).toEqual({ "--list-gutter": "4ch" });
-    expect(orderedListGutterStyle(3, -5)).toBeUndefined();
+    expect(orderedListGutterStyle(3, -5)).toEqual({ "--list-gutter": "3ch" });
   });
 
   it("treats a missing/zero item count as a single item", () => {
     expect(orderedListGutterStyle(0, undefined)).toBeUndefined();
     expect(orderedListGutterStyle(0, 100)).toEqual({ "--list-gutter": "4ch" });
   });
+
+  it.each([
+    [15, "3ch"],
+    [150, "4ch"],
+    [999999999, "10ch"],
+  ])("fits a later literal marker %s without losing the two-digit gutter", (value, width) => {
+    expect(orderedListGutterStyle(2, 1, value)).toEqual({ "--list-gutter": width });
+  });
 });
 
-describe("ChatMarkdown ordered list numbering", () => {
-  it("keeps the typed ordinals for chat-style input", () => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown
-        cwd={undefined}
-        text={"1. one\n5. five\n15. fifteen"}
-        lineBreaks
-        literalListNumbers
-      />,
-    );
+type ParsedListNode = {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  position?: { start: { offset?: number } };
+  children?: ParsedListNode[];
+};
 
-    expect(html).toContain('value="1"');
-    expect(html).toContain('value="5"');
-    expect(html).toContain('value="15"');
-    // Forced decimal markers keep nested alpha/roman styles from repainting
-    // the literal value as a letter.
-    expect(html).toContain("list-style-type:decimal");
+function parsedListElements(markdown: string, parseRawHtml = false): ParsedListNode[] {
+  const elements: ParsedListNode[] = [];
+  // Execute react-markdown's actual parser/converter without rendering static markup.
+  ReactMarkdown({
+    children: markdown,
+    remarkPlugins: [remarkGfm, remarkNormalizeListItemIndentation, remarkBreaks],
+    rehypePlugins: [
+      ...(parseRawHtml ? [rehypeRaw, rehypeSanitize] : []),
+      () => (tree: ParsedListNode) => {
+        const visit = (node: ParsedListNode) => {
+          if (node.tagName === "ol" || node.tagName === "li") elements.push(node);
+          node.children?.forEach(visit);
+        };
+        visit(tree);
+      },
+    ],
+  });
+  return elements;
+}
+
+describe("sourceOrderedListItemValue with parsed Markdown", () => {
+  it.each([
+    ["reported gaps", "1. test\n5. test\n8. test\n15. test", [1, 5, 8, 15]],
+    ["non-one start", "5. five\n8. eight", [5, 8]],
+    ["repeated ones", "1. one\n1. two\n1. three", [1, 1, 1]],
+    ["nested resets", "3. outer\n\n   8. nested\n   2. reset\n\n9. tail", [3, 8, 2, 9]],
+    ["parenthesis markers", "4) four\n9) nine", [4, 9]],
+    ["quoted lists", "> 3. quoted\n> 8. next", [3, 8]],
+    ["CRLF input", "1. one\r\n5. five\r\n15. fifteen", [1, 5, 15]],
+    ["zero start", "0. zero\n0. another", [0, 0]],
+    ["nine-digit marker", "1. one\n999999999. large", [1, 999999999]],
+  ])("reads %s from the parser's source positions", (_name, markdown, expected) => {
+    const values = parsedListElements(markdown)
+      .filter((node) => node.tagName === "li")
+      .map((node) => sourceOrderedListItemValue(markdown, node.position?.start.offset));
+    expect(values).toEqual(expected);
   });
 
-  it("widens the marker gutter for large typed ordinals", () => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown
-        cwd={undefined}
-        text={"1. one\n150. one fifty"}
-        lineBreaks
-        literalListNumbers
-      />,
-    );
-
-    expect(html).toContain("--list-gutter:4ch");
+  it.each([
+    ["escaped punctuation", "1\\. one\n5\\. five"],
+    ["fenced source", "```text\n1. one\n5. five\n```"],
+  ])("does not derive list values from %s", (_name, markdown) => {
+    expect(parsedListElements(markdown)).toEqual([]);
   });
 
-  it("renumbers sequentially for regular markdown", () => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown cwd={undefined} text={"1. one\n5. five\n15. fifteen"} />,
-    );
-
-    expect(html).not.toContain('value="5"');
-    expect(html).not.toContain('value="15"');
+  it("does not assign ordinals to bullet items", () => {
+    const markdown = "- one\n- two";
+    expect(
+      parsedListElements(markdown).map((node) =>
+        sourceOrderedListItemValue(markdown, node.position?.start.offset),
+      ),
+    ).toEqual([undefined, undefined]);
   });
 
-  it("keeps value attributes from parsed raw HTML lists", () => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown
-        cwd={undefined}
-        text={'<ol><li value="5">five</li><li>six</li></ol>'}
-        parseRawHtml
-      />,
-    );
-
-    expect(html).toContain('value="5"');
+  it("leaves the standard parser's implicit counters unchanged", () => {
+    const elements = parsedListElements("5. five\n8. eight\n1. reset");
+    expect(elements.find((node) => node.tagName === "ol")?.properties?.start).toBe(5);
+    expect(
+      elements.filter((node) => node.tagName === "li").map((node) => node.properties?.value),
+    ).toEqual([undefined, undefined, undefined]);
   });
 
-  it("leaves bullet lists untouched", () => {
-    const html = renderToStaticMarkup(
-      <ChatMarkdown cwd={undefined} text={"- one\n- two"} lineBreaks literalListNumbers />,
-    );
+  it("does not replace sanitized raw-HTML values with source ordinals", () => {
+    const markdown = '<ol start="3"><li value="5">five</li><li>six</li></ol>';
+    const items = parsedListElements(markdown, true).filter((node) => node.tagName === "li");
+    expect(items.map((node) => node.properties?.value)).toEqual(["5", undefined]);
+    expect(
+      items.map((node) => sourceOrderedListItemValue(markdown, node.position?.start.offset)),
+    ).toEqual([undefined, undefined]);
+  });
 
-    expect(html).not.toContain("value=");
+  it("leaves generated nodes without source positions alone", () => {
+    expect(sourceOrderedListItemValue("1. one", undefined)).toBeUndefined();
   });
 });
 
