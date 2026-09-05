@@ -176,7 +176,8 @@ describe("registerComposerInlineTokenPaste", () => {
     "yarn expo install @expo/ui",
     "npm install @jane/foo.js",
     "import '@scope/pkg/sub/path'",
-  ])("leaves scoped package command %s to the plain-text paste fallback", (command) => {
+    "@foo(bar)",
+  ])("leaves ambiguous bare mention text %s to the plain-text paste fallback", (text) => {
     vi.stubGlobal("ClipboardEvent", TestClipboardEvent);
     const editor = createEditor();
     const plainTextFallback = vi.fn((event: ClipboardEvent) => {
@@ -201,7 +202,7 @@ describe("registerComposerInlineTokenPaste", () => {
     });
     editor.registerCommand(PASTE_COMMAND, plainTextFallback, COMMAND_PRIORITY_EDITOR);
 
-    const event = new TestClipboardEvent(command);
+    const event = new TestClipboardEvent(text);
     let handled = false;
     editor.update(
       () => {
@@ -212,7 +213,7 @@ describe("registerComposerInlineTokenPaste", () => {
 
     expect(handled).toBe(true);
     expect(plainTextFallback).toHaveBeenCalledOnce();
-    expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toBe(command);
+    expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toBe(text);
   });
 
   it("pastes a canonical scoped folder link as a mention", () => {
