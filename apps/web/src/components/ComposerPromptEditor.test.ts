@@ -94,9 +94,11 @@ describe("registerComposerInlineTokenPaste", () => {
 
   it.each([
     ["@foo(bar)", "@foo(bar)"],
+    ["@écrire(option)", "@écrire(option)"],
     ["@namespace.foo(bar)\nclass Example {}", "@namespace.foo(bar)\nclass Example {}"],
     ['@"foo(bar)"', "[foo(bar)](foo%28bar%29) "],
     ["[foo(bar)](foo%28bar%29)", "[foo(bar)](foo%28bar%29) "],
+    ["@README.md (notes)", "[README.md](README.md) (notes)"],
   ])("preserves pasted decorator text and explicit file references: %s", (text, expected) => {
     vi.stubGlobal("ClipboardEvent", TestClipboardEvent);
     const editor = createEditor();
