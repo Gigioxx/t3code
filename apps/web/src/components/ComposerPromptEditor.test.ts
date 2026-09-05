@@ -1,5 +1,6 @@
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   $createParagraphNode,
@@ -89,6 +90,43 @@ class TestClipboardEvent extends Event {
 describe("registerComposerInlineTokenPaste", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["@foo(bar)", "@foo(bar)"],
+    ["@namespace.foo(bar)\nclass Example {}", "@namespace.foo(bar)\nclass Example {}"],
+    ['@"foo(bar)"', "[foo(bar)](foo%28bar%29) "],
+    ["[foo(bar)](foo%28bar%29)", "[foo(bar)](foo%28bar%29) "],
+  ])("preserves pasted decorator text and explicit file references: %s", (text, expected) => {
+    vi.stubGlobal("ClipboardEvent", TestClipboardEvent);
+    const editor = createEditor();
+    editor.update(
+      () => {
+        const paragraph = $createParagraphNode();
+        $getRoot().append(paragraph);
+        paragraph.selectEnd();
+      },
+      { discrete: true },
+    );
+    registerComposerInlineTokenPaste(editor, {
+      createMentionNode: (path) => $createTextNode(serializeComposerFileLink(path)),
+      createCitationNode: $createComposerCitationNode,
+      getExpandedAbsoluteOffsetForPoint: () => 0,
+    });
+    editor.registerCommand(
+      PASTE_COMMAND,
+      (event) => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !(event instanceof ClipboardEvent)) return false;
+        selection.insertRawText(event.clipboardData?.getData("text/plain") ?? "");
+        return true;
+      },
+      COMMAND_PRIORITY_EDITOR,
+    );
+
+    pasteText(editor, text);
+
+    expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toBe(expected);
   });
 
   it("handles a copied mention without also running the plain-text paste fallback", () => {
