@@ -38,10 +38,12 @@ export function isThreadErrorBannerDismissedForSession(bannerKey: string | null)
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
   onDismiss,
+  onRetry,
   chatGptUsageLimit = false,
 }: {
   error: string | null;
-  onDismiss?: () => void;
+  onDismiss?: (() => void) | undefined;
+  onRetry?: (() => void) | undefined;
   chatGptUsageLimit?: boolean;
 }) {
   if (!error) return null;
@@ -68,9 +70,14 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
             </Tooltip>
           )}
         </AlertDescription>
-        {(chatGptUsageLimit || onDismiss) && (
+        {(chatGptUsageLimit || onRetry || onDismiss) && (
           <AlertAction>
             {chatGptUsageLimit ? <ChatGptUsageButton variant="default" size="sm" /> : null}
+            {onRetry ? (
+              <Button variant="ghost" size="xs" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null}
             {onDismiss ? (
               <Button variant="ghost" size="icon-xs" aria-label="Dismiss error" onClick={onDismiss}>
                 <XIcon className="text-destructive" />

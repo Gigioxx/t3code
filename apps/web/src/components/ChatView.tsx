@@ -86,7 +86,7 @@ import {
   resolveTerminalSessionLabel,
 } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/unstable/reactivity";
 import {
   lazy,
@@ -346,7 +346,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+import { environmentThreads, threadEnvironment, useEnvironmentThread } from "../state/threads";
 import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
@@ -1484,8 +1484,8 @@ export default function ChatView(props: ChatViewProps) {
     forceExpandedMobileComposer = false,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
-  const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
-  const threadDetailLoading = threadSyncPhase === "loading";
+  const routeThreadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
+  const threadDetailLoading = routeThreadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
   const routeThreadRef = useMemo(
@@ -1567,6 +1567,16 @@ export default function ChatView(props: ChatViewProps) {
   );
   const routeServerThreadShell = useThreadShell(routeKind === "server" ? routeThreadRef : null);
   const serverThread = useThread(routeThreadRef, { waitForShell: draftThread !== null });
+  const routeThreadState = useEnvironmentThread(
+    routeKind === "server" ? routeThreadRef.environmentId : null,
+    routeKind === "server" ? routeThreadRef.threadId : null,
+  );
+  const retryThreadSync = useAtomRefresh(environmentThreads.stateAtom(environmentId, threadId));
+  const threadSyncError =
+    routeThreadState.error._tag === "Some" ? routeThreadState.error.value : null;
+  // A failed load shows its error with Retry instead of a progress label, while
+  // the shell stays visible and sending stays blocked until history arrives.
+  const threadSyncPhase = threadSyncError === null ? routeThreadSyncPhase : null;
   const loadingServerThread = useMemo(
     () =>
       threadDetailLoading && routeServerThreadShell
@@ -1577,10 +1587,6 @@ export default function ChatView(props: ChatViewProps) {
   const activeServerThread = serverThread ?? loadingServerThread;
   // Pagination window state for the routed server thread: drives the
   // "load earlier turns" header when the loaded window has older history.
-  const routeThreadState = useEnvironmentThread(
-    routeKind === "server" ? routeThreadRef.environmentId : null,
-    routeKind === "server" ? routeThreadRef.threadId : null,
-  );
   const loadEarlierTurns = useMemo(() => {
     if (routeKind !== "server" || !threadHasOlderTurns(routeThreadState)) {
       return null;
@@ -9809,13 +9815,21 @@ export default function ChatView(props: ChatViewProps) {
                 onOpenProviderSetup={openProviderSetup}
               />
               <ThreadErrorBanner
-                error={visibleThreadError}
-                chatGptUsageLimit={isChatGptUsageLimitError(threadActivities, visibleThreadError)}
-                onDismiss={() => {
-                  setThreadError(activeThread.id, null);
-                  dismissThreadErrorBannerForSession(threadErrorBannerKey);
-                  setThreadErrorBannerDismissTick((tick) => tick + 1);
-                }}
+                error={threadSyncError ?? visibleThreadError}
+                chatGptUsageLimit={
+                  threadSyncError === null &&
+                  isChatGptUsageLimitError(threadActivities, visibleThreadError)
+                }
+                onRetry={threadSyncError === null ? undefined : retryThreadSync}
+                onDismiss={
+                  threadSyncError === null
+                    ? () => {
+                        setThreadError(activeThread.id, null);
+                        dismissThreadErrorBannerForSession(threadErrorBannerKey);
+                        setThreadErrorBannerDismissTick((tick) => tick + 1);
+                      }
+                    : undefined
+                }
               />
             </div>
             {/* Messages Wrapper */}
