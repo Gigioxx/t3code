@@ -22,6 +22,7 @@ export interface ExpandedImageItem {
   /** A loadable URL, or null when the dialog must mint one from `asset` first. */
   src: string | null;
   name: string;
+  mimeType?: string;
   type?: "video";
   autoPlay?: boolean;
   /** Authored remote destination to open when embedding fails, never a generated asset URL. */
@@ -141,7 +142,7 @@ export function buildExpandedImagePreview(
   }
   const previewableImages = images.flatMap((image) =>
     image.type === "image" && image.previewUrl
-      ? [{ id: image.id, src: image.previewUrl, name: image.name }]
+      ? [{ id: image.id, src: image.previewUrl, name: image.name, mimeType: image.mimeType }]
       : [],
   );
   if (previewableImages.length === 0) {
@@ -155,6 +156,7 @@ export function buildExpandedImagePreview(
     images: previewableImages.map((image) => ({
       src: image.src,
       name: image.name,
+      mimeType: image.mimeType,
     })),
     index: selectedIndex,
   };

@@ -8,6 +8,7 @@ import { useAssetUrlRefresh, useAssetUrlState } from "../../assets/assetUrls";
 import { OpenMediaLink } from "../media/OpenMediaLink";
 import { MediaActions, type MediaActionSource } from "../media/MediaActions";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
+import { AttachmentImage } from "../media/AttachmentImage";
 import { isContextMenuOpen } from "../../contextMenuFallback";
 import { composerFloatingLayerProps } from "./composerEventScope";
 
@@ -178,7 +179,9 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
               {openOriginalLink}
             </ExpandedMediaFailure>
           ) : (
-            <img
+            <AttachmentImage
+              name={item.name}
+              mimeType={item.mimeType}
               src={item.src}
               alt={item.name}
               className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"

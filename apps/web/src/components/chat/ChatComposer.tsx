@@ -108,6 +108,7 @@ import {
   type ComposerBannerStackItem,
 } from "./ComposerBannerStack";
 import { compressImageForStash, prepareImageForAttachment } from "../../lib/imageCompression";
+import { AttachmentImage } from "../media/AttachmentImage";
 import {
   fileAttachmentTooLargeMessage,
   formatAttachmentSize,
@@ -3762,7 +3763,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             }}
           >
             {image.previewUrl ? (
-              <img src={image.previewUrl} alt="" className="size-full object-cover" />
+              <AttachmentImage
+                name={image.name}
+                mimeType={image.mimeType}
+                src={image.previewUrl}
+                alt=""
+                className="size-full object-cover"
+              />
             ) : (
               <FileIcon className="m-auto size-3.5 text-secondary-label" />
             )}
@@ -5216,7 +5223,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   onExpandImage(preview);
                                 }}
                               >
-                                <img
+                                <AttachmentImage
+                                  name={image.name}
+                                  mimeType={image.mimeType}
                                   src={image.previewUrl}
                                   alt={image.name}
                                   className="h-full w-full object-cover"
