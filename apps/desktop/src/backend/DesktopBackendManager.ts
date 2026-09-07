@@ -321,6 +321,7 @@ interface BackendManagerState {
   readonly config: Option.Option<DesktopBackendStartConfig>;
   readonly active: Option.Option<ActiveBackendRun>;
   readonly restartAttempt: number;
+  readonly crashAttempt: number;
   // Consecutive bounded/fatal preflight failures, reset on a clean or
   // unbounded-transient preflight. restartAttempt counts all restarts.
   readonly preflightFailureAttempt: number;
@@ -334,6 +335,7 @@ const initialState: BackendManagerState = {
   config: Option.none(),
   active: Option.none(),
   restartAttempt: 0,
+  crashAttempt: 0,
   preflightFailureAttempt: 0,
   restartFiber: Option.none(),
   nextRunId: 1,
@@ -741,6 +743,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           config: Option.some(config.value),
           preflightFailureAttempt: resetFatalPreflightCounter ? 0 : latest.preflightFailureAttempt,
           restartAttempt: current.desiredRunning ? latest.restartAttempt : 0,
+          crashAttempt: current.desiredRunning ? latest.crashAttempt : 0,
         }));
 
         const preflightFailure = config.value.preflightFailure;
@@ -876,6 +879,10 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                         readyAt !== undefined && now - readyAt >= STABLE_BACKEND_UPTIME_MS
                           ? 0
                           : latest.restartAttempt,
+                      crashAttempt:
+                        readyAt !== undefined && now - readyAt >= STABLE_BACKEND_UPTIME_MS
+                          ? 0
+                          : latest.crashAttempt,
                       active: Option.none<ActiveBackendRun>(),
                       ready: false,
                     };
@@ -1007,7 +1014,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       terminalFailure &&
       current.desiredRunning &&
       spec.onFailed &&
-      current.restartAttempt >= MAX_CRASH_ATTEMPTS - 1
+      current.crashAttempt >= MAX_CRASH_ATTEMPTS - 1
     ) {
       yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false, ready: false }));
       // The dialog can quit the app, whose shutdown acquires this instance's mutex.
@@ -1025,6 +1032,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         {
           ...latest,
           restartAttempt: latest.restartAttempt + 1,
+          crashAttempt: latest.crashAttempt + (terminalFailure ? 1 : 0),
         },
       ] as const;
     });
