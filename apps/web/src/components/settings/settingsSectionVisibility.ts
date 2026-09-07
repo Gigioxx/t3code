@@ -12,21 +12,27 @@ export type SettingsSectionVisibilityState = {
   readonly targetIds: ReadonlySet<string>;
 };
 
-const EMPTY_VISIBLE_SETTINGS_SECTION_IDS: ReadonlySet<string> = new Set();
-
-export function getVisibleSettingsSectionIds({
+export function getActiveSettingsSectionId({
   activePath,
   scope,
   visibility,
+  preferredSection,
 }: {
   readonly activePath: string | undefined;
   readonly scope: SettingsSectionVisibilityScope | null;
   readonly visibility: SettingsSectionVisibilityState | null;
-}): ReadonlySet<string> {
+  readonly preferredSection?: {
+    readonly scope: SettingsSectionVisibilityScope | null;
+    readonly targetId: string;
+  } | null;
+}): string | undefined {
   if (!scope || activePath !== scope.path || visibility?.scope !== scope) {
-    return EMPTY_VISIBLE_SETTINGS_SECTION_IDS;
+    return undefined;
   }
-  return visibility.targetIds;
+  if (preferredSection?.scope === scope && visibility.targetIds.has(preferredSection.targetId)) {
+    return preferredSection.targetId;
+  }
+  return visibility.targetIds.values().next().value;
 }
 
 type ElementObserver = {

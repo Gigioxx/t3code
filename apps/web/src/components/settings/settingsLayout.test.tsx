@@ -25,7 +25,7 @@ describe("settings search targets", () => {
     expect(markup).not.toContain("settings-search-target-pulse");
   });
 
-  it("scrolls directly to a section header and restarts the destination pulse", () => {
+  it.each([true, false])("scrolls to a section header with highlight=%s", (highlight) => {
     const sectionScrollIntoView = vi.fn();
     const headerScrollIntoView = vi.fn();
     const focus = vi.fn();
@@ -48,16 +48,21 @@ describe("settings search targets", () => {
       matchMedia: vi.fn(() => ({ matches: false })),
     });
 
-    expect(scrollToSettingsTarget("providers")).toBe(true);
+    expect(scrollToSettingsTarget("providers", { highlight })).toBe(true);
     expect(headerScrollIntoView).toHaveBeenCalledWith({
       behavior: "smooth",
-      block: "center",
+      block: highlight ? "center" : "start",
     });
     expect(sectionScrollIntoView).not.toHaveBeenCalled();
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     expect(remove).toHaveBeenCalledWith("settings-search-target-pulse");
-    expect(add).toHaveBeenCalledWith("settings-search-target-pulse");
-    expect(addEventListener).toHaveBeenCalledWith("blur", expect.any(Function), { once: true });
+    if (highlight) {
+      expect(add).toHaveBeenCalledWith("settings-search-target-pulse");
+      expect(addEventListener).toHaveBeenCalledWith("blur", expect.any(Function), { once: true });
+    } else {
+      expect(add).not.toHaveBeenCalled();
+      expect(addEventListener).not.toHaveBeenCalled();
+    }
   });
 
   it("does not animate the destination when reduced motion is requested", () => {

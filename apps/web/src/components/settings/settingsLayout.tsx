@@ -71,7 +71,7 @@ function scrollAndFocusSettingsTarget(target: HTMLElement, highlight = true): vo
 
   scrollTarget.scrollIntoView({
     behavior: prefersReducedMotion ? "auto" : "smooth",
-    block: "center",
+    block: highlight ? "center" : "start",
   });
   target.focus({ preventScroll: true });
   target.classList.remove("settings-search-target-pulse");

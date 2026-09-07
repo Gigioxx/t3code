@@ -45,8 +45,9 @@ import {
 import { SidebarUtilityMenu } from "../sidebar/SidebarChrome";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
-  getVisibleSettingsSectionIds,
+  getActiveSettingsSectionId,
   observeSettingsSectionVisibility,
+  type SettingsSectionVisibilityScope,
   type SettingsSectionVisibilityState,
 } from "./settingsSectionVisibility";
 import {
@@ -154,6 +155,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const [sectionVisibility, setSectionVisibility] = useState<SettingsSectionVisibilityState | null>(
     null,
   );
+  const [preferredSection, setPreferredSection] = useState<{
+    scope: SettingsSectionVisibilityScope | null;
+    targetId: string;
+  } | null>(null);
   const searchableItems = useAvailableSettingsSearchItems();
   const results = useMemo(() => searchSettings(query, searchableItems), [query, searchableItems]);
   const isSearching = query.trim().length > 0;
@@ -169,10 +174,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
     const pageSections = path ? SETTINGS_PAGE_SECTIONS[path] : undefined;
     return path && pageSections ? { path, pageSections } : null;
   }, [resolvedPathname]);
-  const visiblePageSectionIds = getVisibleSettingsSectionIds({
+  const activePageSectionId = getActiveSettingsSectionId({
     activePath: activeSettingsPath,
     scope: observedVisibilityScope,
     visibility: sectionVisibility,
+    preferredSection,
   });
 
   useEffect(() => {
@@ -249,6 +255,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   );
   const handlePageSectionClick = useCallback(
     (to: SettingsPath, targetId: string) => {
+      setPreferredSection({ scope: observedVisibilityScope, targetId });
       if (isMobile) {
         setOpenMobile(false);
       }
@@ -263,7 +270,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         state: { settingsTargetHighlight: false },
       });
     },
-    [isMobile, navigate, pathname, setOpenMobile],
+    [isMobile, navigate, observedVisibilityScope, pathname, setOpenMobile],
   );
   const clearSearch = useCallback(() => {
     setQuery("");
@@ -435,10 +442,12 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                               <SidebarMenuSubButton
                                 render={<button type="button" />}
                                 size="sm"
-                                data-visible={visiblePageSectionIds.has(section.targetId)}
+                                aria-current={
+                                  activePageSectionId === section.targetId ? "location" : undefined
+                                }
                                 className={cn(
                                   "w-full text-sidebar-muted-foreground/65",
-                                  visiblePageSectionIds.has(section.targetId) &&
+                                  activePageSectionId === section.targetId &&
                                     "font-medium text-sidebar-foreground",
                                 )}
                                 onClick={() => handlePageSectionClick(item.to, section.targetId)}

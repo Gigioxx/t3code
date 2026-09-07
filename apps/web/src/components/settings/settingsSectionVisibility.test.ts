@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  getVisibleSettingsSectionIds,
+  getActiveSettingsSectionId,
   observeSettingsSectionVisibility,
   type SettingsSectionVisibilityEnvironment,
 } from "./settingsSectionVisibility";
@@ -83,28 +83,54 @@ describe("settings section visibility", () => {
     };
 
     expect(
-      getVisibleSettingsSectionIds({
+      getActiveSettingsSectionId({
         activePath: "/settings/general",
         scope: firstGeneralVisit,
         visibility: firstVisibility,
       }),
-    ).toEqual(new Set(["text-generation"]));
+    ).toBe("text-generation");
     expect(
-      getVisibleSettingsSectionIds({
+      getActiveSettingsSectionId({
         activePath: "/settings/providers",
         scope: null,
         visibility: firstVisibility,
       }),
-    ).toEqual(new Set());
+    ).toBeUndefined();
 
     const secondGeneralVisit = { path: "/settings/general" };
     expect(
-      getVisibleSettingsSectionIds({
+      getActiveSettingsSectionId({
         activePath: "/settings/general",
         scope: secondGeneralVisit,
         visibility: firstVisibility,
       }),
-    ).toEqual(new Set());
+    ).toBeUndefined();
+  });
+
+  it("selects one visible section, preferring the clicked destination within the current visit", () => {
+    const scope = { path: "/settings/general" };
+    const state = {
+      activePath: scope.path,
+      scope,
+      visibility: {
+        scope,
+        targetIds: new Set(["behavior", "projects-and-threads", "confirmations"]),
+      },
+    };
+    const preferredSection = { scope, targetId: "projects-and-threads" };
+
+    expect(getActiveSettingsSectionId(state)).toBe("behavior");
+    expect(getActiveSettingsSectionId({ ...state, preferredSection })).toBe("projects-and-threads");
+    expect(
+      getActiveSettingsSectionId({
+        ...state,
+        preferredSection: { ...preferredSection, scope: { path: scope.path } },
+      }),
+    ).toBe("behavior");
+    state.visibility.targetIds.delete("projects-and-threads");
+    expect(getActiveSettingsSectionId({ ...state, preferredSection })).toBe("behavior");
+    state.visibility.targetIds.clear();
+    expect(getActiveSettingsSectionId({ ...state, preferredSection })).toBeUndefined();
   });
 
   it("accumulates visible sections and emits them in sidebar order", () => {
