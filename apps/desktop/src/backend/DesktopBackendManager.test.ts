@@ -193,53 +193,73 @@ function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
-  for (const becomesReady of [false, true]) {
-    it.effect(`stops a primary crash loop (reaches readiness: ${becomesReady})`, () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const persisted = yield* Queue.unbounded<string>();
-          const ready = yield* Queue.unbounded<void>();
-          const failures: string[] = [];
-          let starts = 0;
-          const instance = yield* makeTestInstance({
-            spawnerLayer: Layer.succeed(
-              ChildProcessSpawner.ChildProcessSpawner,
-              ChildProcessSpawner.make(() =>
-                Effect.sync(() => {
-                  starts += 1;
-                  return makeProcess({
-                    exitCode: (becomesReady ? Queue.take(ready) : Effect.void).pipe(
-                      Effect.as(ChildProcessSpawner.ExitCode(1)),
-                    ),
-                  });
-                }),
+  for (const [becomesReady, preflightRetries] of [
+    [false, 0],
+    [true, 0],
+    [false, 4],
+    [true, 4],
+  ] as const) {
+    it.effect(
+      `stops after five crashes (ready: ${becomesReady}, preflight retries: ${preflightRetries})`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const persisted = yield* Queue.unbounded<string>();
+            const ready = yield* Queue.unbounded<void>();
+            const failures: string[] = [];
+            let starts = 0;
+            let resolves = 0;
+            const instance = yield* makeTestInstance({
+              configResolve: Effect.sync(() =>
+                resolves++ < preflightRetries
+                  ? {
+                      ...baseConfig,
+                      preflightFailure: Option.some({ reason: "WSL is starting", fatal: false }),
+                    }
+                  : baseConfig,
               ),
-            ),
-            httpClientLayer: becomesReady
-              ? healthyHttpClientLayer
-              : httpClientLayer(() => Effect.never),
-            onReady: Queue.offer(ready, undefined).pipe(Effect.asVoid),
-            backendOutputLog: {
-              persistFailure: ({ details }) => Queue.offer(persisted, details).pipe(Effect.asVoid),
-            },
-            onFailed: (reason) =>
-              Effect.sync(() => {
-                failures.push(reason);
-              }),
-          });
-          yield* instance.start;
-          yield* Queue.take(persisted);
-          for (const delay of [500, 1_000, 2_000, 4_000]) {
-            yield* TestClock.adjust(delay);
+              spawnerLayer: Layer.succeed(
+                ChildProcessSpawner.ChildProcessSpawner,
+                ChildProcessSpawner.make(() =>
+                  Effect.sync(() => {
+                    starts += 1;
+                    return makeProcess({
+                      exitCode: (becomesReady ? Queue.take(ready) : Effect.void).pipe(
+                        Effect.as(ChildProcessSpawner.ExitCode(1)),
+                      ),
+                    });
+                  }),
+                ),
+              ),
+              httpClientLayer: becomesReady
+                ? healthyHttpClientLayer
+                : httpClientLayer(() => Effect.never),
+              onReady: Queue.offer(ready, undefined).pipe(Effect.asVoid),
+              backendOutputLog: {
+                persistFailure: ({ details }) =>
+                  Queue.offer(persisted, details).pipe(Effect.asVoid),
+              },
+              onFailed: (reason) =>
+                Effect.sync(() => {
+                  failures.push(reason);
+                }),
+            });
+            yield* instance.start;
+            if (preflightRetries > 0) yield* TestClock.adjust(7_500);
             yield* Queue.take(persisted);
-          }
-          yield* TestClock.adjust(10_000);
-          assert.deepEqual(failures, ["code=1"]);
-          assert.equal(starts, 5);
-          assert.equal((yield* instance.snapshot).desiredRunning, false);
-          assert.equal((yield* instance.snapshot).restartScheduled, false);
-        }).pipe(Effect.provide(TestClock.layer())),
-      ),
+            yield* TestClock.adjust(0);
+            assert.deepEqual(failures, []);
+            for (const delay of [500, 1_000, 2_000, 4_000]) {
+              yield* TestClock.adjust(preflightRetries > 0 ? 10_000 : delay);
+              yield* Queue.take(persisted);
+            }
+            yield* TestClock.adjust(10_000);
+            assert.deepEqual(failures, ["code=1"]);
+            assert.equal(starts, 5);
+            assert.equal((yield* instance.snapshot).desiredRunning, false);
+            assert.equal((yield* instance.snapshot).restartScheduled, false);
+          }).pipe(Effect.provide(TestClock.layer())),
+        ),
     );
   }
 
