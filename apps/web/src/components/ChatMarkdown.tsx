@@ -1188,6 +1188,7 @@ function UncachedShikiCodeBlock({
 }
 
 interface MarkdownFileLinkProps {
+  children?: ReactNode;
   href: string;
   targetPath: string;
   iconPath: string;
@@ -1929,6 +1930,7 @@ function MarkdownExternalLinkContent({
 }
 
 const MarkdownFileLink = memo(function MarkdownFileLink({
+  children,
   href,
   targetPath,
   iconPath,
@@ -2210,45 +2212,62 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     canOpenInPanel,
   });
 
+  const chip = <FileTagChipContent path={iconPath} label={label} theme={theme} />;
+  const triggerClassName = cn(MARKDOWN_FILE_LINK_CLASS_NAME, !hasPrimaryAction && "select-text");
+  const triggerProps = hasPrimaryAction
+    ? {
+        "data-markdown-copy": copyMarkdown,
+        onClick: (event: ReactMouseEvent<HTMLElement>) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (onOpen && shouldOpenMarkdownFileLinkInEditor(event)) {
+            handleOpenInEditor();
+            return;
+          }
+          if (useBrowserPrimaryAction) {
+            handleOpenInBrowser();
+            return;
+          }
+          handleOpenInFilePreview();
+        },
+        onContextMenu: handleContextMenu,
+      }
+    : {
+        "aria-label": children ? undefined : `File options for ${label}`,
+        "aria-haspopup": "menu" as const,
+        "data-markdown-copy": copyMarkdown,
+        onClick: handleContextMenu,
+        onContextMenu: handleContextMenu,
+      };
+  // A descriptive label stays link text; only the destination keeps the chip look.
+  const descriptiveContent = children ? (
+    <>
+      {children} (<ContextChip kind="mention">{chip}</ContextChip>)
+    </>
+  ) : null;
+
   return (
     <Tooltip>
       <TooltipTrigger
         render={
-          hasPrimaryAction ? (
-            <ContextChip
-              kind="mention"
-              render={<a href={href} />}
-              className={MARKDOWN_FILE_LINK_CLASS_NAME}
-              data-markdown-copy={copyMarkdown}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (onOpen && shouldOpenMarkdownFileLinkInEditor(event)) {
-                  handleOpenInEditor();
-                  return;
-                }
-                if (useBrowserPrimaryAction) {
-                  handleOpenInBrowser();
-                  return;
-                }
-                handleOpenInFilePreview();
-              }}
-              onContextMenu={handleContextMenu}
-            >
-              <FileTagChipContent path={iconPath} label={label} theme={theme} />
-            </ContextChip>
+          descriptiveContent ? (
+            hasPrimaryAction ? (
+              <a href={href} className={cn(triggerClassName, "text-left")} {...triggerProps}>
+                {descriptiveContent}
+              </a>
+            ) : (
+              <button type="button" className={cn(triggerClassName, "text-left")} {...triggerProps}>
+                {descriptiveContent}
+              </button>
+            )
           ) : (
             <ContextChip
               kind="mention"
-              render={<button type="button" />}
-              aria-label={`File options for ${label}`}
-              aria-haspopup="menu"
-              className={cn(MARKDOWN_FILE_LINK_CLASS_NAME, "select-text")}
-              data-markdown-copy={copyMarkdown}
-              onClick={handleContextMenu}
-              onContextMenu={handleContextMenu}
+              render={hasPrimaryAction ? <a href={href} /> : <button type="button" />}
+              className={triggerClassName}
+              {...triggerProps}
             >
-              <FileTagChipContent path={iconPath} label={label} theme={theme} />
+              {chip}
             </ContextChip>
           )
         }
@@ -2269,6 +2288,7 @@ function areMarkdownFileLinkPropsEqual(
   next: Readonly<MarkdownFileLinkProps>,
 ): boolean {
   return (
+    previous.children === next.children &&
     previous.href === next.href &&
     previous.targetPath === next.targetPath &&
     previous.iconPath === next.iconPath &&
@@ -2614,7 +2634,12 @@ function useChatMarkdownState({
     [cwd, findWorkspaceBasenameMatch, revealFileInFileManager],
   );
   const fileLinkChip = useCallback(
-    (fileLinkMeta: MarkdownFileLinkMeta, copyMarkdown: string, mediaSource?: string) => {
+    (
+      fileLinkMeta: MarkdownFileLinkMeta,
+      copyMarkdown: string,
+      mediaSource?: string,
+      children?: ReactNode,
+    ) => {
       const parentSuffix = fileLinkParentSuffixByPath.get(
         fileLinkMeta.filePath.replaceAll("\\", "/"),
       );
@@ -2671,7 +2696,9 @@ function useChatMarkdownState({
               ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
               : undefined
           }
-        />
+        >
+          {children}
+        </MarkdownFileLink>
       );
     },
     [
@@ -3105,18 +3132,16 @@ const CHAT_MARKDOWN_COMPONENTS = {
     }
 
     const label = nodeToPlainText(children);
-    const escapedLabel = (label || fileLinkMeta.basename)
+    const escapedLabel = (label.trim() ? label : fileLinkMeta.basename)
       .replaceAll("\\", "\\\\")
       .replaceAll("[", "\\[")
       .replaceAll("]", "\\]");
     const copyMarkdown = `[${escapedLabel}](${normalizedHref})`;
-    const chip = fileLinkChip(fileLinkMeta, copyMarkdown, normalizedHref);
-    return isMarkdownFileLinkLabel(label, normalizedHref) ? (
-      chip
-    ) : (
-      <span data-markdown-copy={copyMarkdown}>
-        {children} ({chip})
-      </span>
+    return fileLinkChip(
+      fileLinkMeta,
+      copyMarkdown,
+      normalizedHref,
+      isMarkdownFileLinkLabel(label, normalizedHref) ? undefined : children,
     );
   },
   code: function MarkdownCode({ node, children, className, ...props }) {
