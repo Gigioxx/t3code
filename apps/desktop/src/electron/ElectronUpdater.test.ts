@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
+import * as Tracer from "effect/Tracer";
 import { beforeEach, vi } from "vite-plus/test";
 
 const { autoUpdaterMock } = vi.hoisted(() => ({
@@ -37,10 +39,11 @@ describe("ElectronUpdater", () => {
       const previousLogger = autoUpdaterMock.logger;
       const records: unknown[] = [];
       const logger = Logger.make(({ message, fiber }) => {
+        const span = Context.getOrUndefined(fiber.context, Tracer.ParentSpan);
         records.push({
           message,
           component: fiber.getRef(References.CurrentLogAnnotations).component,
-          span: fiber.currentSpan?._tag === "Span" ? fiber.currentSpan.name : undefined,
+          span: span?._tag === "Span" ? span.name : undefined,
         });
       });
       return Effect.gen(function* () {

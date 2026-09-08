@@ -1,5 +1,5 @@
 diff --git a/out/AppImageUpdater.js b/out/AppImageUpdater.js
-index 25cef3598cd278cc2a7f1432377c7a50048824b9..b8427a0e622766755faaa0d616f361e5a284e265 100644
+index 452e93f..82a6b7c 100644
 --- a/out/AppImageUpdater.js
 +++ b/out/AppImageUpdater.js
 @@ -6,6 +6,7 @@ const child_process_1 = require("child_process");
@@ -10,16 +10,16 @@ index 25cef3598cd278cc2a7f1432377c7a50048824b9..b8427a0e622766755faaa0d616f361e5
  const BaseUpdater_1 = require("./BaseUpdater");
  const FileWithEmbeddedBlockMapDifferentialDownloader_1 = require("./differentialDownloader/FileWithEmbeddedBlockMapDifferentialDownloader");
  const Provider_1 = require("./providers/Provider");
-@@ -74,8 +75,6 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
-         if (appImageFile == null) {
-             throw (0, builder_util_runtime_1.newError)("APPIMAGE env is not defined", "ERR_UPDATER_OLD_FILE_NOT_FOUND");
+@@ -77,8 +78,6 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
+         if (!path.isAbsolute(appImageFile) || appImageFile.includes("\0")) {
+             throw (0, builder_util_runtime_1.newError)(`APPIMAGE env is not a valid absolute path: "${appImageFile}"`, "ERR_UPDATER_OLD_FILE_NOT_FOUND");
          }
 -        // https://stackoverflow.com/a/1712051/1910191
 -        (0, fs_1.unlinkSync)(appImageFile);
          let destination;
          const existingBaseName = path.basename(appImageFile);
          const installerPath = this.installerPath;
-@@ -92,7 +91,53 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
+@@ -95,7 +94,62 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
          else {
              destination = path.join(path.dirname(appImageFile), path.basename(installerPath));
          }
@@ -52,6 +52,15 @@ index 25cef3598cd278cc2a7f1432377c7a50048824b9..b8427a0e622766755faaa0d616f361e5
 +                fs_1.closeSync(fd);
 +            }
 +            fs_1.renameSync(staged, destination);
++            if (process.platform === "linux") {
++                const directoryFd = fs_1.openSync(path.dirname(destination), "r");
++                try {
++                    fs_1.fsyncSync(directoryFd);
++                }
++                finally {
++                    fs_1.closeSync(directoryFd);
++                }
++            }
 +            this._logger.info(`Installed verified AppImage at ${destination}`);
 +        }
 +        finally {
