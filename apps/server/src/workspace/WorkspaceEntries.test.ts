@@ -96,6 +96,37 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
   });
 
   describe("list", () => {
+    it.effect("lists and searches binary files in non-git workspaces", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir();
+        const paths = ["photo.png", "photo.jpeg", "document.pdf", "data.bin", "README.txt"];
+        for (const path of paths) {
+          yield* writeTextFile(cwd, path, "fixture");
+        }
+
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const listed = yield* workspaceEntries.list({ cwd });
+        expect(listed.entries.map((entry) => entry.path).sort()).toEqual([...paths].sort());
+
+        const searched = yield* workspaceEntries.search({ cwd, query: "photo", limit: 10 });
+        expect(searched.entries.map((entry) => entry.path).sort()).toEqual([
+          "photo.jpeg",
+          "photo.png",
+        ]);
+
+        const images = yield* workspaceEntries.search({
+          cwd,
+          query: "",
+          limit: 10,
+          imageOnly: true,
+        });
+        expect(images.entries.map((entry) => entry.path).sort()).toEqual([
+          "photo.jpeg",
+          "photo.png",
+        ]);
+      }),
+    );
+
     it.effect("returns the complete cached workspace index", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTempDir();
