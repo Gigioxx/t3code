@@ -1,3 +1,4 @@
+import { isMarkdownFileLinkLabel } from "@t3tools/client-runtime/markdown-links";
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 import { imageMimeType } from "@t3tools/shared/image";
@@ -423,7 +424,7 @@ function appendChildren(
   return runs;
 }
 
-function nodeTextContent(node: MarkdownNode): string {
+export function nodeTextContent(node: MarkdownNode): string {
   if (node.content !== undefined) {
     return node.content;
   }
@@ -480,7 +481,11 @@ function appendNode(
       }
       const presentation = resolveMarkdownLinkPresentation(node.href ?? "");
       if (presentation.kind === "file") {
-        return appendRun(runs, presentation.label, {
+        const descriptive = !isMarkdownFileLinkLabel(nodeTextContent(node), presentation.href);
+        if (descriptive) {
+          appendChildren(runs, node, { ...context, href: presentation.href });
+        }
+        return appendRun(runs, descriptive ? ` (${presentation.label})` : presentation.label, {
           ...context,
           href: presentation.href,
           fileIcon: presentation.icon,
