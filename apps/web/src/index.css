@@ -403,6 +403,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 /* Stage-channel art needs a mask and pseudo-element gradient, so keep the
    behavior composable without tying it to the global components layer. */
 @utility sidebar-stage-backdrop {
+  /* The art extends below the titlebar; do not inherit its native drag region. */
+  -webkit-app-region: initial;
   --stage-fade: var(--sidebar-stage-fade, var(--app-chrome-background));
   mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 92%);
   -webkit-mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 92%);
