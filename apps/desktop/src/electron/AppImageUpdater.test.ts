@@ -66,6 +66,44 @@ afterEach(() => {
 });
 
 describe("AppImage installation", () => {
+  // eslint-disable-next-line t3code/no-global-process-runtime -- Directory fsync is a Linux installation boundary.
+  it.skipIf(NodeOS.platform() !== "linux").each([false, true])(
+    "syncs the renamed directory before cleanup and relaunch (sync failure: %s)",
+    async (failSync) => {
+      const { installed, installer, updater, errors, root } =
+        await fixture("T3-Code-1.0.0.AppImage");
+      const destination = NodePath.join(root, NodePath.basename(installer));
+      const sync = fs.fsyncSync;
+      let directoryFd: number | undefined;
+      vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+        if (fs.fstatSync(fd).isDirectory()) {
+          directoryFd = fd;
+          expect(fs.fstatSync(fd).ino).toBe(fs.statSync(root).ino);
+          expect(fs.readFileSync(destination, "utf8")).toBe(newBinary);
+          expect(fs.readFileSync(installed, "utf8")).toBe(oldBinary);
+          expect(fs.readFileSync(installer, "utf8")).toBe(newBinary);
+          expect(updater.spawnLog).not.toHaveBeenCalled();
+          expect(updater.logger?.info).not.toHaveBeenCalledWith(
+            expect.stringContaining("Installed verified"),
+          );
+          if (failSync) throw new Error("directory sync failed");
+        }
+        sync(fd);
+      });
+
+      updater.quitAndInstall(true, true);
+
+      const closedFd = directoryFd;
+      expect(closedFd).toBeDefined();
+      if (closedFd !== undefined) expect(() => fs.fstatSync(closedFd)).toThrow();
+      expect(errors).toHaveBeenCalledTimes(failSync ? 1 : 0);
+      expect(updater.spawnLog).toHaveBeenCalledTimes(failSync ? 0 : 1);
+      expect(vi.getTimerCount()).toBe(failSync ? 0 : 1);
+      expect(fs.existsSync(installed)).toBe(failSync);
+      expect(fs.existsSync(installer)).toBe(failSync);
+    },
+  );
+
   it.each(["empty", "corrupt", "ENOSPC"])(
     "preserves the old executable after a %s copy",
     async (fault) => {

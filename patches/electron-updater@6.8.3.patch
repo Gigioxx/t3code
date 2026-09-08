@@ -1,5 +1,5 @@
 diff --git a/out/AppImageUpdater.js b/out/AppImageUpdater.js
-index 25cef3598cd278cc2a7f1432377c7a50048824b9..b8427a0e622766755faaa0d616f361e5a284e265 100644
+index 25cef3598cd278cc2a7f1432377c7a50048824b9..a6132439a056671777e10fcfdd96820e331e489b 100644
 --- a/out/AppImageUpdater.js
 +++ b/out/AppImageUpdater.js
 @@ -6,6 +6,7 @@ const child_process_1 = require("child_process");
@@ -19,7 +19,7 @@ index 25cef3598cd278cc2a7f1432377c7a50048824b9..b8427a0e622766755faaa0d616f361e5
          let destination;
          const existingBaseName = path.basename(appImageFile);
          const installerPath = this.installerPath;
-@@ -92,7 +91,53 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
+@@ -92,7 +91,62 @@ class AppImageUpdater extends BaseUpdater_1.BaseUpdater {
          else {
              destination = path.join(path.dirname(appImageFile), path.basename(installerPath));
          }
@@ -52,6 +52,15 @@ index 25cef3598cd278cc2a7f1432377c7a50048824b9..b8427a0e622766755faaa0d616f361e5
 +                fs_1.closeSync(fd);
 +            }
 +            fs_1.renameSync(staged, destination);
++            if (process.platform === "linux") {
++                const directoryFd = fs_1.openSync(path.dirname(destination), "r");
++                try {
++                    fs_1.fsyncSync(directoryFd);
++                }
++                finally {
++                    fs_1.closeSync(directoryFd);
++                }
++            }
 +            this._logger.info(`Installed verified AppImage at ${destination}`);
 +        }
 +        finally {
