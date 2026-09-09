@@ -54,6 +54,7 @@ function collectChangedFiles(
 
   pushChangedFile(target, seen, record.path);
   pushChangedFile(target, seen, record.filePath);
+  pushChangedFile(target, seen, record.file_path);
   pushChangedFile(target, seen, record.relativePath);
   pushChangedFile(target, seen, record.filename);
   pushChangedFile(target, seen, record.newPath);
@@ -352,6 +353,8 @@ function projectAcpContent(value: unknown): Record<string, unknown> | undefined 
   return summary ? { content: summary } : undefined;
 }
 
+const FILE_CHANGE_TEXT_LIMIT = 4_096;
+
 /**
  * Removes activity payload fields that no current client reads while retaining
  * the full payload in persistence and the event store.
@@ -393,6 +396,29 @@ export function projectActivityPayload(
   const imagePath = projectViewedImagePath(data);
   if (imagePath) {
     projectedData.imagePath = imagePath;
+  }
+
+  if (
+    payload.itemType === "file_change" &&
+    (data.toolName === "Edit" || data.toolName === "Write")
+  ) {
+    const input = asRecord(data.input);
+    const truncated = asRecord(data.inputTruncated);
+    const projectedInput: Record<string, string> = {};
+    const inputTruncated: Record<string, boolean> = {};
+    for (const key of data.toolName === "Edit" ? ["old_string", "new_string"] : ["content"]) {
+      const value = input?.[key];
+      if (typeof value !== "string") continue;
+      // Keep verbatim text without retaining a large backing string or splitting a surrogate pair.
+      projectedInput[key] = Array.from(
+        value.slice(0, FILE_CHANGE_TEXT_LIMIT).replace(/[\uD800-\uDBFF]$/u, ""),
+      ).join("");
+      inputTruncated[key] = truncated?.[key] === true || value.length > projectedInput[key].length;
+    }
+    if (Object.keys(projectedInput).length > 0) {
+      projectedData.input = projectedInput;
+      projectedData.inputTruncated = inputTruncated;
+    }
   }
 
   const changedFiles: string[] = [];

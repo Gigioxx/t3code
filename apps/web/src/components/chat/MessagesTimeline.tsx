@@ -10,6 +10,7 @@ import {
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import {
+  formatFileChangeInput,
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
   workEntryViewedImagePath,
@@ -3125,6 +3126,8 @@ function buildToolCallExpandedBody(
   if (changedFiles.length > 0) {
     addBlock([...new Set(changedFiles)].join("\n"));
   }
+  const fileChangeInput = formatFileChangeInput(workEntry);
+  if (fileChangeInput !== null) blocks.push(fileChangeInput);
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
@@ -3312,7 +3315,8 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const commandMatchesVisibleLabel = workEntry.command?.trim() === previewText.trim();
   const canExpand =
     (showFailedIndicator && previewText.trim().length > 0) ||
-    (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) ||
+    ((workEntry.itemType === "mcp_tool_call" || workEntry.itemType === "file_change") &&
+      workEntry.toolData !== undefined) ||
     Boolean(
       (!commandMatchesVisibleLabel &&
         (workEntryRawCommand(workEntry) || workEntry.command?.trim())) ||
