@@ -410,9 +410,11 @@ export function projectActivityPayload(
       const value = input?.[key];
       if (typeof value !== "string") continue;
       // Keep verbatim text without retaining a large backing string or splitting a surrogate pair.
-      projectedInput[key] = Array.from(
-        value.slice(0, FILE_CHANGE_TEXT_LIMIT).replace(/[\uD800-\uDBFF]$/u, ""),
-      ).join("");
+      const end =
+        (value.codePointAt(FILE_CHANGE_TEXT_LIMIT - 1) ?? 0) > 0xffff
+          ? FILE_CHANGE_TEXT_LIMIT - 1
+          : FILE_CHANGE_TEXT_LIMIT;
+      projectedInput[key] = Array.from(value.slice(0, end)).join("");
       inputTruncated[key] = truncated?.[key] === true || value.length > projectedInput[key].length;
     }
     if (Object.keys(projectedInput).length > 0) {

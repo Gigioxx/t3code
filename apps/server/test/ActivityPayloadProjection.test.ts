@@ -9,7 +9,10 @@ import {
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { formatFileChangeInput } from "../../../packages/client-runtime/src/work-log/presentation.ts";
+import {
+  formatFileChangeInput,
+  hasFileChangeInput,
+} from "../../../packages/client-runtime/src/work-log/presentation.ts";
 
 import { buildThreadFeed, type ThreadFeedActivity } from "../../mobile/src/lib/threadActivity.ts";
 import { deriveLatestContextWindowSnapshot } from "../../web/src/lib/contextWindow.ts";
@@ -238,6 +241,7 @@ describe("projectActivityPayload", () => {
     },
     { toolName: "Edit", input: { old_string: "remove me", new_string: "" } },
     { toolName: "Write", input: { content: "  export const ready = true;\n" } },
+    { toolName: "Write", input: { content: "" } },
   ])("retains verbatim $toolName input for expanded rows", ({ toolName, input }) => {
     const source = makeActivity("claude-edit", "file_change", {
       toolName,
@@ -252,6 +256,7 @@ describe("projectActivityPayload", () => {
 
     const [webEntry] = deriveWorkLogEntries([projected]);
     expect(webEntry).toMatchObject({ toolData: { input } });
+    expect(hasFileChangeInput(webEntry!)).toBe(true);
     const [mobileGroup] = buildThreadFeed(makeThread([projected]));
     expect(mobileGroup?.type).toBe("activity-group");
     if (mobileGroup?.type !== "activity-group") return;
@@ -306,7 +311,46 @@ describe("projectActivityPayload", () => {
       );
       expect(projected.payload).toMatchObject({ data: { toolName: "Write" } });
       const [entry] = deriveWorkLogEntries([projected]);
+      expect(hasFileChangeInput(entry!)).toBe(false);
       expect(formatFileChangeInput(entry!)).toBeNull();
+      const withoutDetail = { ...projected, payload: { ...projected.payload, detail: undefined } };
+      const [mobileGroup] = buildThreadFeed(makeThread([withoutDetail]));
+      expect(mobileGroup?.type).toBe("activity-group");
+      if (mobileGroup?.type !== "activity-group") return;
+      expect(mobileGroup.activities[0]?.canExpand).toBe(false);
+      expect(mobileGroup.activities[0]?.getFullDetail()).toBeNull();
+
+      const withPath = {
+        ...withoutDetail,
+        payload: {
+          ...withoutDetail.payload,
+          data: { toolName: "Write", files: [{ path: "src/example.ts" }] },
+        },
+      };
+      const [pathGroup] = buildThreadFeed(makeThread([withPath]));
+      expect(pathGroup?.type).toBe("activity-group");
+      if (pathGroup?.type !== "activity-group") return;
+      expect(pathGroup.activities[0]?.canExpand).toBe(true);
+      expect(pathGroup.activities[0]?.getCopyText()).toContain("src/example.ts");
+    },
+  );
+
+  it.each(["\uD800", `${"x".repeat(4_095)}\uD800`, `${"x".repeat(4_095)}\uD800tail`])(
+    "preserves lone high surrogates without treating them as split pairs (%#)",
+    (content) => {
+      const projected = projectActivityPayload(
+        makeActivity("lone-surrogate", "file_change", {
+          toolName: "Write",
+          input: { content },
+        }),
+      );
+      expect(projected.payload).toMatchObject({
+        data: {
+          input: { content: content.slice(0, 4_096) },
+          inputTruncated: { content: content.length > 4_096 },
+        },
+      });
+      expect(projectActivityPayload(projected)).toEqual(projected);
     },
   );
 

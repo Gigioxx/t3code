@@ -166,6 +166,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+export function hasFileChangeInput(entry: WorkLogPresentationEntry): boolean {
+  if (entry.itemType !== "file_change") return false;
+  const data = asRecord(entry.toolData);
+  const input = asRecord(data?.input);
+  return data?.toolName === "Edit"
+    ? typeof input?.old_string === "string" || typeof input?.new_string === "string"
+    : data?.toolName === "Write" && typeof input?.content === "string";
+}
+
 export function formatFileChangeInput(entry: WorkLogPresentationEntry): string | null {
   if (entry.itemType !== "file_change") return null;
   const data = asRecord(entry.toolData);
