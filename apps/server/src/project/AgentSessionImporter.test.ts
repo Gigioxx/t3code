@@ -198,7 +198,7 @@ const runImport = (input: {
 
 it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
   describe("importRecentAgentThreads", () => {
-    it.effect("uses the project root and stores provider-specific resume cursors", () =>
+    it.effect("imports sessions owned by another provider instance", () =>
       Effect.gen(function* () {
         const commands: Array<OrchestrationCommand> = [];
         const bindings: Array<ProviderSessionDirectory.ProviderRuntimeBinding> = [];
@@ -233,7 +233,16 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           recordImportedTranscript: () => Effect.void,
           getBinding: () => Effect.succeed(Option.none()),
           listThreadIds: () => Effect.die("unused"),
-          listBindings: () => Effect.die("unused"),
+          listBindings: () =>
+            Effect.succeed([
+              {
+                threadId: ThreadId.make("native-other-instance"),
+                provider: ProviderDriverKind.make("codex"),
+                providerInstanceId: ProviderInstanceId.make("codex-other"),
+                resumeCursor: { threadId: "codex-session" },
+                lastSeenAt: "2026-08-24T10:00:00.000Z",
+              },
+            ]),
         });
 
         const result = yield* runImport({
@@ -338,7 +347,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           recordImportedTranscript: () => Effect.die("unused"),
           getBinding: () => Effect.die("must not read a scanner skip binding"),
           listThreadIds: () => Effect.die("unused"),
-          listBindings: () => Effect.die("unused"),
+          listBindings: () => Effect.succeed([]),
         });
 
         const result = yield* runImport({
@@ -416,7 +425,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           getBinding: () =>
             Effect.succeed(bindings[0] === undefined ? Option.none() : Option.some(bindings[0])),
           listThreadIds: () => Effect.die("unused"),
-          listBindings: () => Effect.die("unused"),
+          listBindings: () => Effect.succeed([]),
         });
         const snapshots = makeSnapshotsLayer({
           project: makeProject(),
@@ -457,7 +466,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           recordImportedTranscript: () => Effect.void,
           getBinding: () => Effect.succeed(Option.some(runningBinding)),
           listThreadIds: () => Effect.die("unused"),
-          listBindings: () => Effect.die("unused"),
+          listBindings: () => Effect.succeed([]),
         });
         const engine = OrchestrationEngine.OrchestrationEngineService.of({
           dispatch: () => Effect.die("must not replay history or settle active work"),
@@ -512,7 +521,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           recordImportedTranscript: () => Effect.die("unused"),
           getBinding: () => Effect.succeed(Option.none()),
           listThreadIds: () => Effect.die("unused"),
-          listBindings: () => Effect.die("unused"),
+          listBindings: () => Effect.succeed([]),
         });
 
         const result = yield* runImport({
@@ -580,6 +589,67 @@ const integrationLayer = Layer.mergeAll(
 );
 
 it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
+  for (const source of ["codex", "claudeAgent"] as const) {
+    it.effect(`does not import a ${source} session already owned by a native thread`, () =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const projectId = ProjectId.make(`native-import-${source}`);
+        const threadId = ThreadId.make(`native-${source}`);
+        const thread = {
+          ...makeThread(source),
+          providerSessionId:
+            source === "codex" ? "native-codex-session" : "123e4567-e89b-42d3-a456-426614174001",
+        };
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make(`create-${projectId}`),
+          projectId,
+          title: "Native project",
+          workspaceRoot: `/tmp/${projectId}`,
+          defaultModelSelection: null,
+          createdAt: thread.createdAt,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create-${threadId}`),
+          threadId,
+          projectId,
+          title: "Native conversation",
+          modelSelection: { instanceId: thread.providerInstanceId, model: "default" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: thread.createdAt,
+        });
+        yield* directory.upsert({
+          threadId,
+          provider: ProviderDriverKind.make(source),
+          providerInstanceId: thread.providerInstanceId,
+          status: "stopped",
+          resumeCursor:
+            source === "codex"
+              ? { threadId: thread.providerSessionId }
+              : { threadId, resume: thread.providerSessionId },
+        });
+        const before = yield* snapshots.getThreadDetailById(threadId);
+        const result = yield* importRecentAgentThreads({ projectId }).pipe(
+          Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
+            scan: Effect.die("unused"),
+            recentThreads: () => Stream.succeed(makeThreadOutcome(thread)),
+          }),
+        );
+        const importedId = ThreadId.make(`import:${source}:${thread.providerSessionId}`);
+        expect(result).toEqual({ importedCount: 0, skippedCount: 1 });
+        expect(yield* snapshots.getThreadDetailById(importedId)).toEqual(Option.none());
+        expect(yield* directory.getBinding(importedId)).toEqual(Option.none());
+        expect(yield* snapshots.getThreadDetailById(threadId)).toEqual(before);
+      }),
+    );
+  }
+
   it.effect("imports once after the real engine persists an old rejected receipt", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngine.OrchestrationEngineService;
