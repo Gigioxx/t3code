@@ -43,6 +43,8 @@ export type ProviderSessionDirectoryWriteError =
 
 export interface ProviderSessionDirectoryUpsertOptions {
   readonly onConflict?: "update" | "ignore";
+  // For insert-ignore imports, reserve only if no native binding owns this session.
+  readonly unlessNativeSessionId?: string;
 }
 
 export interface ProviderSessionDirectoryShape {
