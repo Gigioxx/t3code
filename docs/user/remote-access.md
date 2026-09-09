@@ -136,6 +136,7 @@ check with:
 ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
+Closing the desktop app leaves the remote server and running agents active.
 If SSH reconnecting fails after an app update, retry the launch once. Removing
 the connection stops a server that T3 Code launched; a server that was already
 running is left alone.
