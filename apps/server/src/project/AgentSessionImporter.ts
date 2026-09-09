@@ -261,8 +261,9 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
                   : { threadId, resume: thread.providerSessionId },
               runtimePayload: { cwd: workspaceRoot },
             },
-            { onConflict: "ignore" },
+            { onConflict: "ignore", unlessNativeSessionId: thread.providerSessionId },
           );
+          if (Option.isNone(yield* directory.getBinding(threadId))) return false;
         }
 
         if (Option.isNone(existingThread)) {

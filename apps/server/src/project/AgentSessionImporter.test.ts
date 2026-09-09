@@ -231,7 +231,10 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           upsert: (binding) => Effect.sync(() => void bindings.push(binding)),
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.void,
-          getBinding: () => Effect.succeed(Option.none()),
+          getBinding: (threadId) =>
+            Effect.succeed(
+              Option.fromUndefinedOr(bindings.find((binding) => binding.threadId === threadId)),
+            ),
           listThreadIds: () => Effect.die("unused"),
           listBindings: () =>
             Effect.succeed([
@@ -590,64 +593,93 @@ const integrationLayer = Layer.mergeAll(
 
 it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
   for (const source of ["codex", "claudeAgent"] as const) {
-    it.effect(`does not import a ${source} session already owned by a native thread`, () =>
-      Effect.gen(function* () {
-        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
-        const projectId = ProjectId.make(`native-import-${source}`);
-        const threadId = ThreadId.make(`native-${source}`);
-        const thread = {
-          ...makeThread(source),
-          providerSessionId:
-            source === "codex" ? "native-codex-session" : "123e4567-e89b-42d3-a456-426614174001",
-        };
-        yield* engine.dispatch({
-          type: "project.create",
-          commandId: CommandId.make(`create-${projectId}`),
-          projectId,
-          title: "Native project",
-          workspaceRoot: `/tmp/${projectId}`,
-          defaultModelSelection: null,
-          createdAt: thread.createdAt,
-        });
-        yield* engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make(`create-${threadId}`),
-          threadId,
-          projectId,
-          title: "Native conversation",
-          modelSelection: { instanceId: thread.providerInstanceId, model: "default" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          createdAt: thread.createdAt,
-        });
-        yield* directory.upsert({
-          threadId,
-          provider: ProviderDriverKind.make(source),
-          providerInstanceId: thread.providerInstanceId,
-          status: "stopped",
-          resumeCursor:
-            source === "codex"
-              ? { threadId: thread.providerSessionId }
-              : { threadId, resume: thread.providerSessionId },
-        });
-        const before = yield* snapshots.getThreadDetailById(threadId);
-        const result = yield* importRecentAgentThreads({ projectId }).pipe(
-          Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
-            scan: Effect.die("unused"),
-            recentThreads: () => Stream.succeed(makeThreadOutcome(thread)),
-          }),
-        );
-        const importedId = ThreadId.make(`import:${source}:${thread.providerSessionId}`);
-        expect(result).toEqual({ importedCount: 0, skippedCount: 1 });
-        expect(yield* snapshots.getThreadDetailById(importedId)).toEqual(Option.none());
-        expect(yield* directory.getBinding(importedId)).toEqual(Option.none());
-        expect(yield* snapshots.getThreadDetailById(threadId)).toEqual(before);
-      }),
-    );
+    for (const timing of ["before scan", "before reservation"] as const) {
+      it.effect(`skips native ${source} sessions bound ${timing}`, () =>
+        Effect.gen(function* () {
+          const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+          const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+          const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+          const projectId = ProjectId.make(`native-import-${source}-${timing}`);
+          const threadId = ThreadId.make(`native-${source}-${timing}`);
+          const thread = {
+            ...makeThread(source),
+            providerSessionId:
+              source === "codex"
+                ? `native-codex-session-${timing}`
+                : timing === "before scan"
+                  ? "123e4567-e89b-42d3-a456-426614174001"
+                  : "123e4567-e89b-42d3-a456-426614174002",
+          };
+          yield* engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.make(`create-${projectId}`),
+            projectId,
+            title: "Native project",
+            workspaceRoot: `/tmp/${projectId}`,
+            defaultModelSelection: null,
+            createdAt: thread.createdAt,
+          });
+          yield* engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`create-${threadId}`),
+            threadId,
+            projectId,
+            title: "Native conversation",
+            modelSelection: { instanceId: thread.providerInstanceId, model: "default" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdAt: thread.createdAt,
+          });
+          const bindNative = directory.upsert({
+            threadId,
+            provider: ProviderDriverKind.make(source),
+            providerInstanceId: thread.providerInstanceId,
+            status: "stopped",
+            resumeCursor:
+              source === "codex"
+                ? { threadId: thread.providerSessionId }
+                : { threadId, resume: thread.providerSessionId },
+          });
+          if (timing === "before scan") yield* bindNative;
+          const before = yield* snapshots.getThreadDetailById(threadId);
+          const result = yield* importRecentAgentThreads({ projectId }).pipe(
+            Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, {
+              ...directory,
+              upsert: (binding, options) =>
+                bindNative.pipe(Effect.andThen(directory.upsert(binding, options))),
+            }),
+            Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
+              scan: Effect.die("unused"),
+              recentThreads: () => Stream.succeed(makeThreadOutcome(thread)),
+            }),
+          );
+          const importedId = ThreadId.make(`import:${source}:${thread.providerSessionId}`);
+          expect(result).toEqual({ importedCount: 0, skippedCount: 1 });
+          expect(yield* snapshots.getThreadDetailById(importedId)).toEqual(Option.none());
+          expect(yield* directory.getBinding(importedId)).toEqual(Option.none());
+          expect(yield* snapshots.getThreadDetailById(threadId)).toEqual(before);
+          const otherInstance = ProviderInstanceId.make(`${source}-other`);
+          const otherThreadId = ThreadId.make(
+            `import:${otherInstance}:${thread.providerSessionId}`,
+          );
+          yield* directory.upsert(
+            {
+              threadId: otherThreadId,
+              provider: ProviderDriverKind.make(source),
+              providerInstanceId: otherInstance,
+              resumeCursor:
+                source === "codex"
+                  ? { threadId: thread.providerSessionId }
+                  : { resume: thread.providerSessionId },
+            },
+            { onConflict: "ignore", unlessNativeSessionId: thread.providerSessionId },
+          );
+          expect(Option.isSome(yield* directory.getBinding(otherThreadId))).toBe(true);
+        }),
+      );
+    }
   }
 
   it.effect("imports once after the real engine persists an old rejected receipt", () =>

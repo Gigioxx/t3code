@@ -67,6 +67,7 @@ export type RecordImportedTranscriptInput = typeof RecordImportedTranscriptInput
 
 export interface ProviderSessionRuntimeUpsertOptions {
   readonly onConflict?: "update" | "ignore";
+  readonly unlessNativeSessionId?: string;
 }
 
 /**
@@ -235,7 +236,9 @@ export const make = Effect.gen(function* () {
   });
 
   const insertRuntimeRow = SqlSchema.void({
-    Request: ProviderSessionRuntimeDbRowSchema,
+    Request: ProviderSessionRuntimeDbRowSchema.mapFields(
+      Struct.assign({ unlessNativeSessionId: Schema.NullOr(Schema.String) }),
+    ),
     execute: (runtime) =>
       sql`
         INSERT INTO provider_session_runtime (
@@ -249,7 +252,7 @@ export const make = Effect.gen(function* () {
           resume_cursor_json,
           runtime_payload_json
         )
-        VALUES (
+        SELECT
           ${runtime.threadId},
           ${runtime.providerName},
           ${runtime.providerInstanceId},
@@ -263,6 +266,17 @@ export const make = Effect.gen(function* () {
             THEN json_remove(${runtime.runtimePayload}, '$.importedTranscripts')
             ELSE ${runtime.runtimePayload}
           END
+        WHERE ${runtime.unlessNativeSessionId} IS NULL OR NOT EXISTS (
+          SELECT 1 FROM provider_session_runtime
+          WHERE thread_id NOT LIKE 'import:%'
+            AND provider_name = ${runtime.providerName}
+            AND COALESCE(provider_instance_id, provider_name) = ${runtime.providerInstanceId}
+            AND CASE WHEN json_valid(resume_cursor_json) THEN
+              json_extract(resume_cursor_json, CASE provider_name
+                WHEN 'claudeAgent' THEN '$.resume'
+                WHEN 'codex' THEN '$.threadId'
+              END)
+            END = ${runtime.unlessNativeSessionId}
         )
         ON CONFLICT (thread_id) DO NOTHING
       `,
@@ -365,7 +379,13 @@ export const make = Effect.gen(function* () {
   });
 
   const upsert: ProviderSessionRuntimeRepository["Service"]["upsert"] = (runtime, options) =>
-    (options?.onConflict === "ignore" ? insertRuntimeRow(runtime) : upsertRuntimeRow(runtime)).pipe(
+    (options?.onConflict === "ignore"
+      ? insertRuntimeRow({
+          ...runtime,
+          unlessNativeSessionId: options.unlessNativeSessionId ?? null,
+        })
+      : upsertRuntimeRow(runtime)
+    ).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProviderSessionRuntimeRepository.upsert:query",
