@@ -233,6 +233,7 @@ server.listen(0, "127.0.0.1", () => {
             ChildProcess.make("/bin/sh", ["-s", "--", "fixture"], {
               cwd: fixture,
               env: { T3_TEST_STATE_DIR: fixture },
+              extendEnv: true,
               stdin: Stream.make(new TextEncoder().encode(script)),
             }),
           );
