@@ -310,6 +310,16 @@ describe("CheckpointReactor", () => {
     const cwd = createGitRepository();
     if (options?.initializeGit === false) {
       NodeFS.rmSync(NodePath.join(cwd, ".git"), { recursive: true });
+    } else if (
+      options?.providerSessionCwd === undefined &&
+      options?.localStatusRefName !== undefined
+    ) {
+      runGit(
+        cwd,
+        options.localStatusRefName === null
+          ? ["checkout", "--detach"]
+          : ["checkout", "-B", options.localStatusRefName],
+      );
     }
     tempDirs.push(cwd);
     const provider = createProviderServiceHarness(
@@ -1070,20 +1080,26 @@ describe("CheckpointReactor", () => {
     },
   );
 
-  effectIt.effect.each(["main", "feature"])(
-    "rejects a queued drift update from %s after the provider session moves again",
-    (originalBranch) =>
+  effectIt.effect.each([
+    { originalBranch: "main", change: "cwd" },
+    { originalBranch: "feature", change: "cwd" },
+    { originalBranch: "main", change: "branch" },
+    { originalBranch: "main", change: "detach" },
+  ])(
+    "rejects a queued drift update from $originalBranch after a $change change",
+    ({ originalBranch, change }) =>
       Effect.gen(function* () {
         const repository = createGitRepository();
         tempDirs.push(repository);
         const worktree = NodePath.join(repository, ".claude/worktrees/feature");
         runGit(repository, ["worktree", "add", "-b", "feature", worktree]);
+        const threadWorktreePath = change === "cwd" ? null : worktree;
         const pullRequestRefreshCalls: string[] = [];
         const harness = yield* Effect.promise(() =>
           createHarness({
             seedFilesystemCheckpoints: false,
             projectWorkspaceRoot: repository,
-            threadWorktreePath: null,
+            threadWorktreePath,
             providerSessionCwd: worktree,
             threadBranch: originalBranch,
             localStatusRefName: "feature",
@@ -1114,7 +1130,14 @@ describe("CheckpointReactor", () => {
             payload: { state: "completed" },
           });
           yield* Deferred.await(dispatchReached);
-          harness.provider.setSessionCwd(repository);
+          if (change === "cwd") {
+            harness.provider.setSessionCwd(repository);
+          } else {
+            runGit(
+              worktree,
+              change === "detach" ? ["checkout", "--detach"] : ["checkout", "-b", "next"],
+            );
+          }
         }).pipe(Effect.ensuring(Deferred.succeed(releaseDispatch, undefined)));
         yield* Effect.promise(harness.drain).pipe(
           Effect.ensuring(Effect.sync(() => spy.mockRestore())),
@@ -1123,7 +1146,7 @@ describe("CheckpointReactor", () => {
           (entry) => entry.id === ThreadId.make("thread-1"),
         );
         expect(thread?.branch).toBe(originalBranch);
-        expect(thread?.worktreePath).toBe(null);
+        expect(thread?.worktreePath).toBe(threadWorktreePath);
         expect(pullRequestRefreshCalls).toEqual([]);
       }),
   );

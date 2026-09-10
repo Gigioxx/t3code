@@ -605,6 +605,7 @@ const make = Effect.gen(function* () {
       if (!locationChanged && worktreeIsShared) return;
       const branch =
         worktreePath !== null && !worktreeIsShared && adoptableBranch ? checkedOutBranch : null;
+      const { driver } = yield* vcs.resolve({ cwd: input.cwd });
 
       // Reject stale reads if a user changed the branch or worktree meanwhile.
       yield* orchestrationEngine.dispatch(
@@ -619,11 +620,31 @@ const make = Effect.gen(function* () {
         },
         {
           validateBeforeCommit: Effect.gen(function* () {
+            const currentBranch = yield* driver
+              .execute({
+                operation: "CheckpointReactor.validateWorktreeBranch",
+                cwd: input.cwd,
+                args: ["branch", "--show-current"],
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationCommandInvariantError({
+                      commandType: "thread.meta.update",
+                      detail: "Could not verify the provider checkout branch.",
+                      cause,
+                    }),
+                ),
+              );
             const sessionRuntime = yield* resolveSessionRuntimeForThread(input.threadId);
-            if (Option.isNone(sessionRuntime) || sessionRuntime.value.cwd !== input.cwd) {
+            if (
+              Option.isNone(sessionRuntime) ||
+              sessionRuntime.value.cwd !== input.cwd ||
+              (currentBranch.stdout.trim() || null) !== checkedOutBranch
+            ) {
               return yield* new OrchestrationCommandInvariantError({
                 commandType: "thread.meta.update",
-                detail: "Provider session cwd changed during worktree status refresh.",
+                detail: "Provider checkout changed during worktree status refresh.",
               });
             }
           }),
