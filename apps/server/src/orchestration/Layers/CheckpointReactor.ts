@@ -37,6 +37,7 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
+import { OrchestrationCommandInvariantError } from "../Errors.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { VcsDriverRegistry } from "../../vcs/VcsDriverRegistry.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
@@ -530,6 +531,8 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
     if (!thread || thread.branch !== checkedOutBranch) return;
     if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, input.turnId)) return;
+    const sessionRuntime = yield* resolveSessionRuntimeForThread(input.threadId);
+    if (Option.isNone(sessionRuntime) || sessionRuntime.value.cwd !== input.cwd) return;
     yield* vcsStatusBroadcaster.refreshPullRequestStatus(input.cwd).pipe(
       Effect.catch((error) =>
         Effect.logWarning("failed to refresh pull request status after turn completion", {
@@ -604,15 +607,28 @@ const make = Effect.gen(function* () {
         worktreePath !== null && !worktreeIsShared && adoptableBranch ? checkedOutBranch : null;
 
       // Reject stale reads if a user changed the branch or worktree meanwhile.
-      yield* orchestrationEngine.dispatch({
-        type: "thread.meta.update",
-        commandId: yield* serverCommandId("worktree-branch-drift"),
-        threadId: thread.id,
-        branch,
-        expectedBranch: thread.branch,
-        expectedWorktreePath: thread.worktreePath,
-        ...(locationChanged ? { worktreePath } : {}),
-      });
+      yield* orchestrationEngine.dispatch(
+        {
+          type: "thread.meta.update",
+          commandId: yield* serverCommandId("worktree-branch-drift"),
+          threadId: thread.id,
+          branch,
+          expectedBranch: thread.branch,
+          expectedWorktreePath: thread.worktreePath,
+          ...(locationChanged ? { worktreePath } : {}),
+        },
+        {
+          validateBeforeCommit: Effect.gen(function* () {
+            const sessionRuntime = yield* resolveSessionRuntimeForThread(input.threadId);
+            if (Option.isNone(sessionRuntime) || sessionRuntime.value.cwd !== input.cwd) {
+              return yield* new OrchestrationCommandInvariantError({
+                commandType: "thread.meta.update",
+                detail: "Provider session cwd changed during worktree status refresh.",
+              });
+            }
+          }),
+        },
+      );
       yield* Effect.logInfo("thread branch followed worktree checkout", {
         threadId: thread.id,
         previousBranch: thread.branch,

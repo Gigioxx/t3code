@@ -149,6 +149,9 @@ function createProviderServiceHarness(
 
   return {
     service,
+    setSessionCwd: (nextCwd: string) => {
+      sessionCwd = nextCwd;
+    },
     assertConversationRollbackSupported,
     rollbackConversation,
     emit,
@@ -1065,6 +1068,64 @@ describe("CheckpointReactor", () => {
         ).toBe(null);
       }
     },
+  );
+
+  effectIt.effect.each(["main", "feature"])(
+    "rejects a queued drift update from %s after the provider session moves again",
+    (originalBranch) =>
+      Effect.gen(function* () {
+        const repository = createGitRepository();
+        tempDirs.push(repository);
+        const worktree = NodePath.join(repository, ".claude/worktrees/feature");
+        runGit(repository, ["worktree", "add", "-b", "feature", worktree]);
+        const pullRequestRefreshCalls: string[] = [];
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            seedFilesystemCheckpoints: false,
+            projectWorkspaceRoot: repository,
+            threadWorktreePath: null,
+            providerSessionCwd: worktree,
+            threadBranch: originalBranch,
+            localStatusRefName: "feature",
+            pullRequestRefreshCalls,
+          }),
+        );
+        const dispatchReached = yield* Deferred.make<void>();
+        const releaseDispatch = yield* Deferred.make<void>();
+        const dispatch = harness.engine.dispatch;
+        const spy = vi
+          .spyOn(harness.engine, "dispatch")
+          .mockImplementation((command, options) =>
+            command.type === "thread.meta.update"
+              ? Deferred.succeed(dispatchReached, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseDispatch)),
+                  Effect.andThen(dispatch(command, options)),
+                )
+              : dispatch(command, options),
+          );
+        yield* Effect.gen(function* () {
+          harness.provider.emit({
+            type: "turn.completed",
+            eventId: EventId.make("evt-stale-cwd-refresh"),
+            provider: ProviderDriverKind.make("claudeAgent"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId: ThreadId.make("thread-1"),
+            turnId: asTurnId("turn-stale-cwd"),
+            payload: { state: "completed" },
+          });
+          yield* Deferred.await(dispatchReached);
+          harness.provider.setSessionCwd(repository);
+        }).pipe(Effect.ensuring(Deferred.succeed(releaseDispatch, undefined)));
+        yield* Effect.promise(harness.drain).pipe(
+          Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+        );
+        const thread = (yield* Effect.promise(harness.readModel)).threads.find(
+          (entry) => entry.id === ThreadId.make("thread-1"),
+        );
+        expect(thread?.branch).toBe(originalBranch);
+        expect(thread?.worktreePath).toBe(null);
+        expect(pullRequestRefreshCalls).toEqual([]);
+      }),
   );
 
   it("adopts a drifted checkout as the thread branch on a dedicated worktree", async () => {
