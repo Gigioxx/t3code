@@ -1019,6 +1019,24 @@ describe("OrchestrationEngine", () => {
 
     const snapshot = await system.readModel();
     expect(snapshot.threads[0]?.branch).toBe("t3code/generated-branch-name");
+    for (const expected of [
+      { expectedBranch: "stale", expectedWorktreePath: "/tmp/project-branch-race-worktree" },
+      { expectedBranch: "t3code/generated-branch-name", expectedWorktreePath: null },
+    ]) {
+      await system.run(
+        engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make(`stale-location-${expected.expectedBranch}`),
+          threadId: ThreadId.make("thread-branch-race"),
+          branch: "another-branch",
+          worktreePath: "/tmp/another-worktree",
+          ...expected,
+        }),
+      );
+      const current = (await system.readModel()).threads[0];
+      expect(current?.branch).toBe("t3code/generated-branch-name");
+      expect(current?.worktreePath).toBe("/tmp/project-branch-race-worktree");
+    }
     await system.dispose();
   });
 

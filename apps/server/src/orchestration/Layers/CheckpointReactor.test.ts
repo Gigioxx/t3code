@@ -436,7 +436,8 @@ describe("CheckpointReactor", () => {
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: options?.threadBranch ?? null,
-          worktreePath: options?.threadWorktreePath ?? cwd,
+          worktreePath:
+            options?.threadWorktreePath !== undefined ? options.threadWorktreePath : cwd,
           createdAt,
         })
         .pipe(
@@ -970,6 +971,101 @@ describe("CheckpointReactor", () => {
 
     expect(pullRequestRefreshCalls).toEqual([]);
   });
+
+  it.each([
+    "dedicated",
+    "shared",
+    "shared-alias",
+    "detached",
+    "temporary",
+    "return",
+    "unrelated",
+  ] as const)(
+    "follows the provider into a %s checkout without retaining the old branch",
+    async (destination) => {
+      const repository = createGitRepository();
+      tempDirs.push(repository);
+      const worktree = NodePath.join(repository, ".claude/worktrees/feature");
+      runGit(repository, ["worktree", "add", "-b", "feature", worktree]);
+      runGit(repository, ["checkout", "-b", "original"]);
+      runGit(worktree, ["checkout", "main"]);
+      if (destination === "detached") runGit(worktree, ["checkout", "--detach"]);
+      if (destination === "temporary") runGit(worktree, ["checkout", "-b", "t3code/0a1b2c3d"]);
+      const unrelated = destination === "unrelated" ? createGitRepository() : null;
+      if (unrelated) tempDirs.push(unrelated);
+      const cwd = unrelated ?? (destination === "return" ? repository : worktree);
+      const harness = await createHarness({
+        seedFilesystemCheckpoints: false,
+        projectWorkspaceRoot: repository,
+        threadWorktreePath: destination === "return" ? worktree : null,
+        providerSessionCwd: cwd,
+        threadBranch: "original",
+        localStatusRefName:
+          destination === "detached"
+            ? null
+            : destination === "temporary"
+              ? "t3code/0a1b2c3d"
+              : destination === "return"
+                ? "original"
+                : "main",
+      });
+      const shared = destination === "shared" || destination === "shared-alias";
+      const siblingPath =
+        destination === "shared-alias" ? NodePath.join(repository, "alias") : worktree;
+      if (destination === "shared-alias") NodeFS.symlinkSync(worktree, siblingPath, "junction");
+      if (shared) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("create-worktree-owner"),
+            threadId: ThreadId.make("thread-2"),
+            projectId: asProjectId("project-1"),
+            title: "Worktree owner",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            branch: "feature",
+            worktreePath: siblingPath,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        );
+      }
+      harness.provider.emit({
+        type: "turn.completed",
+        eventId: EventId.make("evt-turn-completed-cwd-change"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-cwd-change"),
+        payload: { state: "completed" },
+      });
+      await harness.drain();
+      const snapshot = await harness.readModel();
+      const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(thread?.worktreePath).toBe(destination === "return" || unrelated ? null : worktree);
+      expect(thread?.branch).toBe(
+        destination === "dedicated" ? "main" : unrelated ? "original" : null,
+      );
+      if (shared) {
+        expect(
+          snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-2"))?.branch,
+        ).toBe("feature");
+        harness.provider.emit({
+          type: "turn.completed",
+          eventId: EventId.make("evt-turn-completed-still-shared"),
+          provider: ProviderDriverKind.make("claudeAgent"),
+          createdAt: "2026-01-01T00:00:01.000Z",
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-still-shared"),
+          payload: { state: "completed" },
+        });
+        await harness.drain();
+        expect(
+          (await harness.readModel()).threads.find((entry) => entry.id === thread?.id)?.branch,
+        ).toBe(null);
+      }
+    },
+  );
 
   it("adopts a drifted checkout as the thread branch on a dedicated worktree", async () => {
     const harness = await createHarness({
