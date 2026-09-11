@@ -244,27 +244,24 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
           return yield* new AgentSessionThreadModifiedError({ threadId });
         }
 
-        // Install the cursor before the thread becomes visible. A concurrent
-        // real session can replace it, while insert-ignore keeps this import
-        // from replacing that newer binding.
-        if (Option.isNone(existingBinding)) {
-          yield* directory.upsert(
-            {
-              threadId,
-              provider,
-              providerInstanceId: thread.providerInstanceId,
-              status: "stopped",
-              runtimeMode: DEFAULT_RUNTIME_MODE,
-              resumeCursor:
-                thread.source === "codex"
-                  ? { threadId: thread.providerSessionId }
-                  : { threadId, resume: thread.providerSessionId },
-              runtimePayload: { cwd: workspaceRoot },
-            },
-            { onConflict: "ignore", unlessNativeSessionId: thread.providerSessionId },
-          );
-          if (Option.isNone(yield* directory.getBinding(threadId))) return false;
-        }
+        // Check native ownership even when retrying an old reservation, without
+        // replacing a binding that a real session may have updated.
+        const reserved = yield* directory.upsert(
+          {
+            threadId,
+            provider,
+            providerInstanceId: thread.providerInstanceId,
+            status: "stopped",
+            runtimeMode: DEFAULT_RUNTIME_MODE,
+            resumeCursor:
+              thread.source === "codex"
+                ? { threadId: thread.providerSessionId }
+                : { threadId, resume: thread.providerSessionId },
+            runtimePayload: { cwd: workspaceRoot },
+          },
+          { onConflict: "ignore", unlessNativeSessionId: thread.providerSessionId },
+        );
+        if (!reserved) return false;
 
         if (Option.isNone(existingThread)) {
           yield* engine.dispatch({

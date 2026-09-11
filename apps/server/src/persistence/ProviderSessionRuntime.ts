@@ -85,7 +85,7 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
     readonly upsert: (
       runtime: ProviderSessionRuntime,
       options?: ProviderSessionRuntimeUpsertOptions,
-    ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
+    ) => Effect.Effect<boolean, ProviderSessionRuntimeRepositoryError>;
 
     /** Record one source file without replacing the current session state. */
     readonly recordImportedTranscript: (
@@ -235,10 +235,12 @@ export const make = Effect.gen(function* () {
       `,
   });
 
-  const insertRuntimeRow = SqlSchema.void({
+  // A no-op conflict update lets RETURNING report allowed reuse without changing the binding.
+  const insertRuntimeRow = SqlSchema.findOneOption({
     Request: ProviderSessionRuntimeDbRowSchema.mapFields(
       Struct.assign({ unlessNativeSessionId: Schema.NullOr(Schema.String) }),
     ),
+    Result: Schema.Struct({ threadId: ThreadId }),
     execute: (runtime) =>
       sql`
         INSERT INTO provider_session_runtime (
@@ -278,7 +280,8 @@ export const make = Effect.gen(function* () {
               END)
             END = ${runtime.unlessNativeSessionId}
         )
-        ON CONFLICT (thread_id) DO NOTHING
+        ON CONFLICT (thread_id) DO UPDATE SET thread_id = provider_session_runtime.thread_id
+        RETURNING thread_id AS "threadId"
       `,
   });
 
@@ -383,8 +386,8 @@ export const make = Effect.gen(function* () {
       ? insertRuntimeRow({
           ...runtime,
           unlessNativeSessionId: options.unlessNativeSessionId ?? null,
-        })
-      : upsertRuntimeRow(runtime)
+        }).pipe(Effect.map(Option.isSome))
+      : upsertRuntimeRow(runtime).pipe(Effect.as(true))
     ).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(

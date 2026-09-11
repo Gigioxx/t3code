@@ -228,7 +228,7 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
           latestSequence: Effect.succeed(0),
         });
         const directory = ProviderSessionDirectory.ProviderSessionDirectory.of({
-          upsert: (binding) => Effect.sync(() => void bindings.push(binding)),
+          upsert: (binding) => Effect.sync(() => bindings.push(binding)).pipe(Effect.as(true)),
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.void,
           getBinding: (threadId) =>
@@ -420,8 +420,8 @@ it.layer(NodeServices.layer)("AgentSessionImporter", (it) => {
                 }),
               );
             }
-            bindings.push(binding);
-            return Effect.void;
+            if (bindings.length === 0) bindings.push(binding);
+            return Effect.succeed(true);
           },
           getProvider: () => Effect.die("unused"),
           recordImportedTranscript: () => Effect.void,
@@ -677,6 +677,121 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
             { onConflict: "ignore", unlessNativeSessionId: thread.providerSessionId },
           );
           expect(Option.isSome(yield* directory.getBinding(otherThreadId))).toBe(true);
+        }),
+      );
+    }
+  }
+
+  for (const source of ["codex", "claudeAgent"] as const) {
+    for (const owner of ["same instance", "other instance", "none"] as const) {
+      it.effect(`rechecks a reserved ${source} import with native owner in ${owner}`, () =>
+        Effect.gen(function* () {
+          const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+          const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+          const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+          const projectId = ProjectId.make(`retry-native-${source}-${owner}`);
+          const nativeId = ThreadId.make(`native-${projectId}`);
+          const thread = {
+            ...makeThread(source),
+            providerSessionId:
+              source === "codex"
+                ? `retry-native-${owner}`
+                : owner === "same instance"
+                  ? "123e4567-e89b-42d3-a456-426614174011"
+                  : owner === "other instance"
+                    ? "123e4567-e89b-42d3-a456-426614174012"
+                    : "123e4567-e89b-42d3-a456-426614174013",
+          };
+          const importedId = ThreadId.make(`import:${source}:${thread.providerSessionId}`);
+          yield* engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.make(`create-${projectId}`),
+            projectId,
+            title: "Retry native ownership",
+            workspaceRoot: `/tmp/${projectId}`,
+            defaultModelSelection: null,
+            createdAt: thread.createdAt,
+          });
+          yield* engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`create-${nativeId}`),
+            threadId: nativeId,
+            projectId,
+            title: "Native conversation",
+            modelSelection: { instanceId: thread.providerInstanceId, model: "default" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdAt: thread.createdAt,
+          });
+          const scanner = AgentSessionScanner.AgentSessionScanner.of({
+            scan: Effect.die("unused"),
+            recentThreads: () => Stream.succeed(makeThreadOutcome(thread)),
+          });
+          const failed = yield* importRecentAgentThreads({ projectId }).pipe(
+            Effect.provideService(AgentSessionScanner.AgentSessionScanner, scanner),
+            Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
+              ...engine,
+              dispatch: (command) =>
+                command.type === "thread.create"
+                  ? Effect.fail(
+                      new OrchestrationCommandInvariantError({
+                        commandType: command.type,
+                        detail: "Injected thread creation failure after reservation.",
+                      }),
+                    )
+                  : engine.dispatch(command),
+            }),
+          );
+          expect(failed).toEqual({ importedCount: 0, skippedCount: 1 });
+          expect(yield* snapshots.getThreadDetailById(importedId)).toEqual(Option.none());
+          const reservation = yield* directory.getBinding(importedId);
+          expect(Option.getOrThrow(reservation).status).toBe("stopped");
+          const nativeBefore = yield* snapshots.getThreadDetailById(nativeId);
+
+          const result = yield* importRecentAgentThreads({ projectId }).pipe(
+            Effect.provideService(AgentSessionScanner.AgentSessionScanner, {
+              ...scanner,
+              recentThreads: () =>
+                Stream.fromEffect(
+                  Effect.gen(function* () {
+                    if (owner !== "none") {
+                      yield* directory.upsert({
+                        threadId: nativeId,
+                        provider: ProviderDriverKind.make(source),
+                        providerInstanceId:
+                          owner === "same instance"
+                            ? thread.providerInstanceId
+                            : ProviderInstanceId.make(`${source}-other`),
+                        status: "running",
+                        resumeCursor:
+                          source === "codex"
+                            ? { threadId: thread.providerSessionId }
+                            : { threadId: nativeId, resume: thread.providerSessionId },
+                      });
+                    }
+                    return makeThreadOutcome(thread);
+                  }).pipe(Effect.orDie),
+                ),
+            }),
+          );
+          expect(yield* snapshots.getThreadDetailById(nativeId)).toEqual(nativeBefore);
+          if (owner === "same instance") {
+            expect(result).toEqual({ importedCount: 0, skippedCount: 1 });
+            expect(yield* snapshots.getThreadDetailById(importedId)).toEqual(Option.none());
+            expect(yield* directory.getBinding(importedId)).toEqual(reservation);
+          } else {
+            expect(result).toEqual({ importedCount: 1, skippedCount: 0 });
+            expect(
+              Option.getOrThrow(yield* snapshots.getThreadDetailById(importedId)).messages.map(
+                (message) => message.text,
+              ),
+            ).toEqual(thread.messages.map((message) => message.text));
+            expect(Option.getOrThrow(yield* directory.getBinding(importedId)).resumeCursor).toEqual(
+              Option.getOrThrow(reservation).resumeCursor,
+            );
+          }
         }),
       );
     }
