@@ -123,7 +123,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         issue: "providerInstanceId is required for provider session runtime bindings.",
       });
     }
-    yield* repository
+    return yield* repository
       .upsert(
         {
           threadId: resolvedThreadId,
