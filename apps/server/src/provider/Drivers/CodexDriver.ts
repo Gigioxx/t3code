@@ -200,8 +200,9 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Live sessions keep the account they spawned with. When a probe shows a
       // different login, stop them so the next send respawns app-server with
       // the current credentials (the same path as Stop or the idle reaper).
-      // Only signed-in probes move the baseline, so a logout or failed probe
-      // in between does not hide the switch.
+      // Only signed-in probes move the baseline, and a switch moves it only
+      // after the stop succeeds, so a logout, failed probe, or failed stop in
+      // between does not hide the switch from the next probe.
       const lastProbedAuth = yield* Ref.make<ServerProvider["auth"] | null>(null);
       const checkProvider = modelManifest.refreshInBackground.pipe(
         Effect.andThen(
@@ -216,14 +217,14 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         Effect.tap((probed) =>
           probed.auth.status !== "authenticated"
             ? Effect.void
-            : Ref.getAndSet(lastProbedAuth, probed.auth).pipe(
+            : Ref.get(lastProbedAuth).pipe(
                 Effect.flatMap((previous) =>
                   hasCodexAccountChanged(previous, probed.auth)
                     ? Effect.logInfo("Codex account changed; stopping live sessions.", {
                         instanceId,
-                        email: probed.auth.email,
                       }).pipe(
                         Effect.andThen(adapter.stopAll()),
+                        Effect.andThen(Ref.set(lastProbedAuth, probed.auth)),
                         Effect.catchCause((cause) =>
                           Effect.logWarning("Failed to stop Codex sessions after account change.", {
                             instanceId,
@@ -231,7 +232,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
                           }),
                         ),
                       )
-                    : Effect.void,
+                    : Ref.set(lastProbedAuth, probed.auth),
                 ),
               ),
         ),
