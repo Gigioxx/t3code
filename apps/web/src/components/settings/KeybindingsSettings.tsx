@@ -1357,6 +1357,8 @@ export function KeybindingsSettingsPanel() {
   const whenVariables = useMemo(() => buildWhenVariableOptions(), []);
 
   useEffect(() => {
+    if (connectedEnvironments.length === 0) return;
+
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       const isMod = event.metaKey || event.ctrlKey;
       if (!isMod || event.altKey || event.key.toLowerCase() !== "f") return;
@@ -1379,7 +1381,7 @@ export function KeybindingsSettingsPanel() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [connectedEnvironments.length]);
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -1499,6 +1501,16 @@ export function KeybindingsSettingsPanel() {
     onReset: resetKeybinding,
     onRemove: removeKeybinding,
   };
+
+  if (connectedEnvironments.length === 0) {
+    return (
+      <SettingsPageContainer>
+        <p role="status" className="text-sm text-muted-foreground">
+          Connect an environment to change keybindings.
+        </p>
+      </SettingsPageContainer>
+    );
+  }
 
   return (
     <SettingsPageContainer>
