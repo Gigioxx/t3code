@@ -1333,7 +1333,11 @@ export function KeybindingsSettingsPanel() {
   // The representative environment supplies the displayed bindings; edits
   // fan out to every connected environment in the selection, so one
   // shortcut change reaches each machine the user runs T3 Code on.
-  const { environment: primaryEnvironment, connectedEnvironments } = useSettingsScope();
+  const {
+    environment: primaryEnvironment,
+    environments,
+    connectedEnvironments,
+  } = useSettingsScope();
   const keybindings = primaryEnvironment?.serverConfig?.keybindings ?? DEFAULT_RESOLVED_KEYBINDINGS;
   const keybindingsConfigPath = primaryEnvironment?.serverConfig?.keybindingsConfigPath ?? null;
   const availableEditors = primaryEnvironment?.serverConfig?.availableEditors ?? [];
@@ -1506,7 +1510,9 @@ export function KeybindingsSettingsPanel() {
     return (
       <SettingsPageContainer>
         <p role="status" className="text-sm text-muted-foreground">
-          Connect an environment to change keybindings.
+          {environments.some((environment) => environment.connection.phase === "connected")
+            ? "Loading keybindings…"
+            : "Connect an environment to change keybindings."}
         </p>
       </SettingsPageContainer>
     );
