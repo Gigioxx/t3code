@@ -100,6 +100,8 @@ const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 // Pierre remounts (and resets to the top) whenever the review scope changes, so remember where
 // each thread's scope was left and jump back to it when that scope mounts again.
 const diffScrollTopByScopeKey = new Map<string, number>();
+// Last file reveal applied per scope, so a remount does not repeat it over the saved offset.
+const handledDiffRevealByScopeKey = new Map<string, string>();
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -478,19 +480,19 @@ export default function DiffPanel({
     });
   }, [codeView, collapseScopeKey, firstDiffFileKey]);
 
-  const handledRevealRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selectedDiffFileKey || !codeView?.getInstance()) return;
-    const revealKey = `${collapseScopeKey}:${selectedDiffFileKey}:${selectedFileRevealRequestId}`;
+    const revealKey = `${selectedDiffFileKey}:${selectedFileRevealRequestId}`;
     // Remounting with the same reveal keeps the saved position; only fresh requests jump to the file.
-    if (
-      handledRevealRef.current === revealKey &&
-      collapseScopeKey &&
-      diffScrollTopByScopeKey.has(collapseScopeKey)
-    ) {
-      return;
+    if (collapseScopeKey) {
+      if (
+        handledDiffRevealByScopeKey.get(collapseScopeKey) === revealKey &&
+        diffScrollTopByScopeKey.has(collapseScopeKey)
+      ) {
+        return;
+      }
+      handledDiffRevealByScopeKey.set(collapseScopeKey, revealKey);
     }
-    handledRevealRef.current = revealKey;
     codeView.scrollTo({ type: "item", id: selectedDiffFileKey, align: "start" });
   }, [
     codeView,
