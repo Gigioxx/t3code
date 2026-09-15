@@ -1607,6 +1607,22 @@ const make = Effect.gen(function* () {
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
 
+      if (event.type === "session.exited") {
+        // Adapters close or remove the old runtime before emitting its exit.
+        // A live runtime here is a replacement, even if the exit was queued first.
+        const sessions = yield* providerService.listSessions();
+        if (
+          sessions.some(
+            (session) =>
+              session.threadId === thread.id &&
+              session.status !== "closed" &&
+              session.status !== "error",
+          )
+        ) {
+          return;
+        }
+      }
+
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
@@ -2037,10 +2053,11 @@ const make = Effect.gen(function* () {
 
       if (event.type === "session.exited") {
         yield* clearTurnStateForSession(thread.id);
-        yield* dismissPendingApprovals(
-          orchestrationEngine,
-          yield* pendingApprovals.listPending({ threadId: thread.id }),
-          now,
+        yield* pendingApprovals.listPending({ threadId: thread.id }).pipe(
+          Effect.flatMap((approvals) =>
+            dismissPendingApprovals(orchestrationEngine, approvals, now),
+          ),
+          Effect.retry({ times: 1 }),
         );
       }
 
