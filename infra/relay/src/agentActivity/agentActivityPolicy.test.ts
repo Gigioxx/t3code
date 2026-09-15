@@ -85,6 +85,15 @@ describe("shared agent activity policy", () => {
     ).toMatchObject([{ environmentId: other.environmentId }]);
   });
 
+  it.each(["waiting_for_input", "waiting_for_approval"] as const)(
+    "does not alert on stale %s state after reconnect",
+    (phase) => {
+      const input = { ...state, phase, preferences };
+      expect(shouldAlertForActivity({ ...input, nowMs: 120_000 })).toBe(true);
+      expect(shouldAlertForActivity({ ...input, nowMs: 120_001 })).toBe(false);
+    },
+  );
+
   it("checks current permission, event preferences, and freshness together", () => {
     const input = { ...state, phase: "completed" as const, preferences, nowMs: 0 };
     expect(shouldAlertForActivity(input)).toBe(true);

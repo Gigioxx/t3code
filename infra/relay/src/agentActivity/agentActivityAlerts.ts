@@ -11,13 +11,11 @@ export interface AgentActivityAlert {
   readonly body: string;
 }
 
-export const TERMINAL_NOTIFICATION_FRESHNESS_MS = 2 * 60 * 1_000;
+export const NOTIFICATION_FRESHNESS_MS = 2 * 60 * 1_000;
 
-export function isFreshTerminalNotification(updatedAt: string, nowMs: number): boolean {
+export function isFreshNotification(updatedAt: string, nowMs: number): boolean {
   const timestamp = Option.getOrNull(DateTime.make(updatedAt));
-  return (
-    timestamp !== null && nowMs - timestamp.epochMilliseconds <= TERMINAL_NOTIFICATION_FRESHNESS_MS
-  );
+  return timestamp !== null && nowMs - timestamp.epochMilliseconds <= NOTIFICATION_FRESHNESS_MS;
 }
 
 type TransitionInput = {
@@ -99,7 +97,7 @@ export function terminalTransitionRows(
   ).filter((row) => {
     return (
       alertAllowedForPhase(input.preferences, row.phase) &&
-      isFreshTerminalNotification(row.updatedAt, input.nowMs)
+      isFreshNotification(row.updatedAt, input.nowMs)
     );
   });
 }
@@ -146,7 +144,6 @@ export function shouldAlertForActivity(input: {
   return (
     input.preferences?.notificationsEnabled === true &&
     alertAllowedForPhase(input.preferences, input.phase) &&
-    ((input.phase !== "completed" && input.phase !== "failed") ||
-      isFreshTerminalNotification(input.updatedAt, input.nowMs))
+    isFreshNotification(input.updatedAt, input.nowMs)
   );
 }
