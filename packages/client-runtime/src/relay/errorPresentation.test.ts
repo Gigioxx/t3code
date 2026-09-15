@@ -12,7 +12,7 @@ import {
 } from "./errorPresentation.ts";
 
 describe("relayProtectedErrorMessage", () => {
-  it("directs publish-only connection failures to the host's T3 Connect settings", () => {
+  it("provides desktop and command-line recovery for publish-only connection failures", () => {
     const error = new RelayEnvironmentConnectNotAuthorizedError({
       code: "environment_connect_not_authorized",
       reason: "endpoint_provider_not_managed",
@@ -20,7 +20,7 @@ describe("relayProtectedErrorMessage", () => {
     });
 
     expect(relayProtectedErrorMessage(error)).toBe(
-      "This environment is linked for activity publishing only. In the host desktop app, open Settings > Connections and enable or repair T3 Connect.",
+      "This environment is linked for activity publishing only. In the host desktop app, open Settings > Connections and enable or repair T3 Connect. For a command-line host, run t3 connect again.",
     );
   });
 

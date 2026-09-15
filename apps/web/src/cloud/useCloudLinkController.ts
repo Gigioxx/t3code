@@ -31,7 +31,7 @@ export interface CloudLinkDesiredState {
  * `reconcileCloudState` applies it: unlink when neither is wanted, otherwise
  * (re)link with the mode the managed-tunnel bit implies and set the publish
  * preference. Re-linking happens when the mode changes, discovery detects
- * drift, or the user requests a repair. Publishing-only changes stay cheap.
+ * drift or is refreshing an unknown mode, or the user requests a repair.
  */
 export function useCloudLinkController() {
   const { getToken, isSignedIn } = useAuth();
@@ -130,6 +130,7 @@ export function useCloudLinkController() {
       if (
         forceRelink ||
         !linked ||
+        (relayDiscovery.refreshing && relayEnvironment === undefined) ||
         managedTunnelOutOfSync ||
         managedTunnelActive !== desired.managedTunnel
       ) {

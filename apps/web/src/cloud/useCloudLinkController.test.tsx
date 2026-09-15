@@ -112,6 +112,18 @@ it("relinks a publish-only relay record even when local T3 Connect is already on
   expect(mocks.refreshRelay).toHaveBeenCalledOnce();
 });
 
+it("relinks when discovery temporarily clears the drifted record during refresh", async () => {
+  discovery = { ...discovery, environments: new Map(), refreshing: true };
+  await act(async () => renderer?.update(<Harness />));
+  await act(async () => {
+    expect(await controller.reconcileCloudState({ managedTunnel: true, publish: false })).toBe(
+      true,
+    );
+  });
+  expect(mocks.link).toHaveBeenCalledWith({ target, clerkToken: "test-token", mode: "managed" });
+  expect(mocks.preferences).toHaveBeenCalledWith({ target, publishAgentActivity: false });
+});
+
 it.each(["healthy", "unknown"])(
   "keeps publish changes cheap when the relay mode is %s",
   async (state) => {
