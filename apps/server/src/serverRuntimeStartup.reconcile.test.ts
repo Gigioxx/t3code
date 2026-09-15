@@ -168,6 +168,53 @@ it.effect("dismisses only approvals whose runtime is absent at startup", () => {
   );
 });
 
+it.effect("still reconciles sessions when approval dismissal keeps failing", () => {
+  const thread = makeThread("approval-dismissal-failure", "running");
+  const commands: OrchestrationCommand[] = [];
+  return runReconciliation({
+    threads: [thread],
+    approvals: [
+      {
+        requestId: ApprovalRequestId.make("failed-dismissal"),
+        threadId: thread.id,
+        turnId: null,
+        status: "pending",
+        decision: null,
+        createdAt: updatedAt,
+        resolvedAt: null,
+      },
+    ],
+    directory: {
+      getBinding: () => Effect.succeedNone,
+      upsert: () => Effect.die("unused"),
+      recordImportedTranscript: () => Effect.die("unused"),
+      getProvider: () => Effect.die("unused"),
+      listThreadIds: () => Effect.die("unused"),
+      listBindings: () => Effect.succeed([]),
+    },
+    dispatch: (command) =>
+      Effect.suspend(() => {
+        commands.push(command);
+        return command.type === "thread.activity.append"
+          ? Effect.fail(
+              new OrchestrationCommandInvariantError({
+                commandType: command.type,
+                detail: "dismissal persistence failed",
+              }),
+            )
+          : Effect.succeed({ sequence: commands.length });
+      }),
+  }).pipe(
+    Effect.tap(() => {
+      assert.deepStrictEqual(
+        commands.map((command) => command.type),
+        ["thread.activity.append", "thread.activity.append", "thread.session.set"],
+      );
+      return Effect.void;
+    }),
+  );
+});
+
 it.effect("marks active running sessions that have persisted resume state", () => {
   const active = makeThread("thread-mark-active", "running", TurnId.make("turn-mark-active"));
   const archived = makeThread(
