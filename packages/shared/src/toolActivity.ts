@@ -284,11 +284,14 @@ export function deriveToolActivityPresentation(
   }
 
   if (action === "search") {
-    const args = asRecord(data?.rawInput) ?? asRecord(data?.input) ?? asRecord(item?.arguments);
-    const query =
-      asTrimmedString(args?.query) ??
-      asTrimmedString(args?.pattern) ??
-      asTrimmedString(args?.searchTerm);
+    const query = [asRecord(data?.rawInput), asRecord(data?.input), asRecord(item?.arguments)]
+      .map(
+        (args) =>
+          asTrimmedString(args?.query) ??
+          asTrimmedString(args?.pattern) ??
+          asTrimmedString(args?.searchTerm),
+      )
+      .find((value) => value !== undefined);
     return {
       summary:
         input.itemType === "web_search" || /^web_?search$/iu.test(title ?? "")
