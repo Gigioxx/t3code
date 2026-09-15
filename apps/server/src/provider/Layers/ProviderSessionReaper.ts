@@ -34,24 +34,30 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
-    let previousSweep: { wallMs: number; monotonicMs: number } | undefined;
+    let previousSample: { wallMs: number; monotonicMs: number } | undefined;
     let lastResumeMs = 0;
 
-    const sweep = Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
+    const checkForResume = Effect.gen(function* () {
       const monotonicMs = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
+      const now = yield* Clock.currentTimeMillis;
       if (
-        previousSweep &&
-        now -
-          previousSweep.wallMs -
-          Math.min(monotonicMs - previousSweep.monotonicMs, sweepIntervalMs) >
-          CLOCK_JUMP_TOLERANCE_MS
+        previousSample &&
+        (now - previousSample.wallMs - (monotonicMs - previousSample.monotonicMs) >
+          CLOCK_JUMP_TOLERANCE_MS ||
+          now - previousSample.wallMs > sweepIntervalMs * 2)
       ) {
-        // Monotonic clocks may include sleep, so also detect overdue sweeps.
-        // ponytail: scheduler stalls also grant grace; use power events for exact accounting.
+        // Some clocks count suspend. Require a missed sweep, not ordinary timer lateness.
+        // ponytail: multi-minute stalls also grant grace; use power events for exact accounting.
         lastResumeMs = now;
       }
+      previousSample = { wallMs: now, monotonicMs };
+      return now;
+    });
+
+    const sweep = Effect.gen(function* () {
+      yield* checkForResume;
       const bindings = yield* directory.listBindings();
+      let now = yield* checkForResume;
       let reapedCount = 0;
 
       for (const binding of bindings) {
@@ -76,6 +82,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
+        now = yield* checkForResume;
         // Ingestion updates this timestamp alongside activeTurnId when a turn
         // settles. Long turns must get a full idle window after that transition,
         // even though the binding was last touched when the turn was sent.
@@ -141,11 +148,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           totalBindings: bindings.length,
         });
       }
-      // Measure only the scheduled wait, excluding time spent reaping sessions.
-      previousSweep = {
-        wallMs: yield* Clock.currentTimeMillis,
-        monotonicMs: Number(yield* Clock.monotonicTimeNanos) / 1_000_000,
-      };
+      yield* checkForResume;
     });
 
     const start: ProviderSessionReaperShape["start"] = () =>
