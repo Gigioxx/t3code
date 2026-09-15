@@ -482,6 +482,16 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
   const previous = yield* Effect.forEach(updates, ([name]) =>
     dependencies.secrets.get(name).pipe(Effect.map((value) => ({ name, value }))),
   );
+  const savedRuntime = previous.find(({ name }) => name === CLOUD_ENDPOINT_RUNTIME_CONFIG)!.value;
+  const previousRuntime = Option.flatMap(savedRuntime, (value) =>
+    decodeRuntimeConfig(bytesToString(value)),
+  );
+  if (payload.endpointRuntime && Option.isSome(savedRuntime) && Option.isNone(previousRuntime)) {
+    return yield* new EnvironmentHttpConflictError({
+      message:
+        "Saved managed endpoint configuration is invalid. Unlink the environment before enabling T3 Connect.",
+    });
+  }
   let attempted = 0;
   let runtimeChanged = false;
   return yield* Effect.gen(function* () {
@@ -519,14 +529,7 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
           ),
         );
         if (runtimeChanged) {
-          const runtime = previous.find(
-            ({ name }) => name === CLOUD_ENDPOINT_RUNTIME_CONFIG,
-          )!.value;
-          yield* dependencies.endpointRuntime.applyConfig(
-            Option.isSome(runtime)
-              ? Option.getOrNull(decodeRuntimeConfig(bytesToString(runtime.value)))
-              : null,
-          );
+          yield* dependencies.endpointRuntime.applyConfig(Option.getOrNull(previousRuntime));
         }
       }),
     ),

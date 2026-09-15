@@ -203,6 +203,53 @@ describe("applyCloudRelayConfig", () => {
     }),
   );
 
+  for (const invalidRuntime of ["invalid-json", '{"providerKind":"cloudflare_tunnel"}']) {
+    it.effect(`rejects a managed update with invalid saved config: ${invalidRuntime}`, () =>
+      Effect.gen(function* () {
+        const harness = makeHarness();
+        harness.values.set(CLOUD_ENDPOINT_RUNTIME_CONFIG, new TextEncoder().encode(invalidRuntime));
+        const before = new Map(harness.values);
+        const writes: Array<string> = [];
+        const error = yield* Effect.flip(
+          applyCloudRelayConfig(
+            {
+              ...harness,
+              secrets: {
+                ...harness.secrets,
+                set: (name, value) =>
+                  Effect.gen(function* () {
+                    writes.push(name);
+                    yield* harness.secrets.set(name, value);
+                  }),
+              },
+              endpointRuntime: {
+                applyConfig: (config) =>
+                  Effect.gen(function* () {
+                    yield* harness.endpointRuntime.applyConfig(config);
+                    return {
+                      status: "failed",
+                      providerKind: "cloudflare_tunnel",
+                      reason: "cannot start",
+                    } as const;
+                  }),
+              },
+            },
+            { ...payload, endpointRuntime: oldRuntime },
+          ),
+        );
+        expect(error._tag).toBe("EnvironmentHttpConflictError");
+        expect(writes).toEqual([]);
+        expect(harness.values).toEqual(before);
+        expect(harness.runtimeCalls).toEqual([]);
+
+        const result = yield* applyCloudRelayConfig(harness, payload);
+        expect(result.ok).toBe(true);
+        expect(harness.values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(false);
+        expect(harness.runtimeCalls).toEqual([null]);
+      }),
+    );
+  }
+
   it.effect("rolls back an interrupted write before a queued relink proceeds", () =>
     Effect.gen(function* () {
       const harness = makeHarness();
