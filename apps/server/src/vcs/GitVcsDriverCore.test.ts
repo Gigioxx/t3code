@@ -2158,6 +2158,12 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   describe("remote operations", () => {
     for (const scenario of [
       { name: "stalled signing", lines: ["signing"], authError: true },
+      {
+        name: "stalled signing during fetch-all",
+        lines: ["signing"],
+        authError: true,
+        fetchAll: true,
+      },
       { name: "a stalled network handshake", lines: ["packet"], authError: false },
       { name: "a slow fetch after signing", lines: ["signing", "packet"], authError: false },
       {
@@ -2214,7 +2220,11 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
             Effect.provide(ServerConfigLayer),
           );
           const fetching = yield* driver
-            .fetchRemote({ cwd, remoteName: "origin", refName: "main" })
+            .fetchRemote({
+              cwd,
+              remoteName: "origin",
+              ...(scenario.fetchAll ? {} : { refName: "main" }),
+            })
             .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
           yield* Deferred.await(outputRead);
           yield* TestClock.adjust("11 seconds");
