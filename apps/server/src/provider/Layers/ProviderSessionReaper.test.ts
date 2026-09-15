@@ -150,20 +150,23 @@ describe("ProviderSessionReaper", () => {
     );
   }
 
-  async function sweepAt(nowMs: number) {
+  async function sweepAt(
+    nowMs: number | { wallMs: number; monotonicMs: number },
+    monotonicMs = typeof nowMs === "number" ? nowMs : nowMs.monotonicMs,
+  ) {
+    const time = typeof nowMs === "number" ? { wallMs: nowMs, monotonicMs } : nowMs;
     await runtime!.runPromise(
       Effect.gen(function* () {
         const reaper = yield* ProviderSessionReaper;
-        const clock = yield* Clock.Clock;
         const swept = yield* Deferred.make<void>();
         yield* reaper.start().pipe(
           Effect.provideService(Clock.Clock, {
-            currentTimeMillis: Effect.succeed(nowMs),
-            currentTimeMillisUnsafe: () => nowMs,
-            currentTimeNanos: Effect.succeed(BigInt(nowMs) * 1_000_000n),
-            currentTimeNanosUnsafe: () => BigInt(nowMs) * 1_000_000n,
-            monotonicTimeNanos: clock.monotonicTimeNanos,
-            monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+            currentTimeMillis: Effect.sync(() => time.wallMs),
+            currentTimeMillisUnsafe: () => time.wallMs,
+            currentTimeNanos: Effect.sync(() => BigInt(time.wallMs) * 1_000_000n),
+            currentTimeNanosUnsafe: () => BigInt(time.wallMs) * 1_000_000n,
+            monotonicTimeNanos: Effect.sync(() => BigInt(time.monotonicMs) * 1_000_000n),
+            monotonicTimeNanosUnsafe: () => BigInt(time.monotonicMs) * 1_000_000n,
             // Reaching the next scheduled sleep proves this sweep has finished.
             sleep: () => Deferred.succeed(swept, undefined).pipe(Effect.andThen(Effect.never)),
           }),
@@ -517,6 +520,102 @@ describe("ProviderSessionReaper", () => {
       expect(harness.stopSession).toHaveBeenCalledExactlyOnceWith({ threadId });
     },
   );
+
+  it.each([
+    { sleepMs: 8 * 60 * 60 * 1_000, monotonicAdvances: false },
+    { sleepMs: 8 * 60 * 60 * 1_000, monotonicAdvances: true },
+    { sleepMs: 2_000, monotonicAdvances: false },
+  ])(
+    "gives sessions a fresh idle window after $sleepMs ms sleep, monotonic clock advances=$monotonicAdvances",
+    async ({ sleepMs, monotonicAdvances }) => {
+      const threadId = ThreadId.make("thread-reaper-sleep");
+      const now = "2026-04-14T01:00:00.000Z";
+      const nowMs = Date.parse(now);
+      const harness = await createHarness({
+        readModel: makeReadModel([{ id: threadId, session: null }]),
+      });
+      const repository = await runtime!.runPromise(
+        Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+      );
+      await runtime!.runPromise(
+        repository.upsert({
+          threadId,
+          providerName: "claudeAgent",
+          providerInstanceId: null,
+          adapterKey: "claudeAgent",
+          runtimeMode: "full-access",
+          status: "running",
+          lastSeenAt: now,
+          resumeCursor: { opaque: "resume-sleep" },
+          runtimePayload: null,
+        }),
+      );
+
+      await sweepAt(nowMs, 0);
+      expect(harness.stopSession).not.toHaveBeenCalled();
+
+      const resumedAt = nowMs + sleepMs;
+      const monotonicMs = monotonicAdvances ? sleepMs : 0;
+      await sweepAt(resumedAt, monotonicMs);
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      await sweepAt(resumedAt + 999, monotonicMs + 999);
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      const secondResumeAt = resumedAt + 999 + sleepMs;
+      const secondMonotonicMs = monotonicMs + 999 + (monotonicAdvances ? sleepMs : 0);
+      await sweepAt(secondResumeAt, secondMonotonicMs);
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      await sweepAt(secondResumeAt + 999, secondMonotonicMs + 999);
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      await sweepAt(secondResumeAt + 1_000, secondMonotonicMs + 1_000);
+      expect(harness.stopSession).toHaveBeenCalledExactlyOnceWith({ threadId });
+    },
+  );
+
+  it("does not mistake a slow sweep for host sleep", async () => {
+    const threadId = ThreadId.make("thread-reaper-slow-stop");
+    const lastSeenAt = "2026-04-14T01:00:00.000Z";
+    const time = { wallMs: Date.parse(lastSeenAt) + 1_000, monotonicMs: 0 };
+    const harness = await createHarness({
+      readModel: makeReadModel([{ id: threadId, session: null }]),
+      stopSessionImplementation: () =>
+        Effect.sync(() => {
+          time.wallMs += 2_000;
+          time.monotonicMs += 2_000;
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new ProviderValidationError({
+                operation: "ProviderSessionReaper.test",
+                issue: "slow stop failed; retry on the next sweep",
+              }),
+            ),
+          ),
+        ),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt,
+        resumeCursor: { opaque: "resume-slow-stop" },
+        runtimePayload: null,
+      }),
+    );
+    await sweepAt(time);
+    expect(harness.stopSession).toHaveBeenCalledTimes(1);
+
+    time.wallMs += 60_000;
+    time.monotonicMs += 60_000;
+    await sweepAt(time);
+    expect(harness.stopSession).toHaveBeenCalledTimes(2);
+  });
 
   it("skips persisted sessions that are already marked stopped", async () => {
     const threadId = ThreadId.make("thread-reaper-stopped");
