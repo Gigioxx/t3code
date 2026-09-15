@@ -494,6 +494,7 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
   }
   let attempted = 0;
   let runtimeChanged = false;
+  let rollbackError: EnvironmentCloudEndpointUnavailableError | undefined;
   return yield* Effect.gen(function* () {
     for (const [name, value] of updates) {
       // set can fail after rename, so restore the failing write as well.
@@ -516,7 +517,7 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
     }
     return { ok, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;
   }).pipe(
-    Effect.onError(() =>
+    Effect.onError((cause) =>
       Effect.gen(function* () {
         yield* Effect.forEach(previous.slice(0, attempted), ({ name, value }) =>
           (Option.isSome(value)
@@ -529,10 +530,24 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
           ),
         );
         if (runtimeChanged) {
-          yield* dependencies.endpointRuntime.applyConfig(Option.getOrNull(previousRuntime));
+          const endpointRuntimeStatus = yield* dependencies.endpointRuntime.applyConfig(
+            Option.getOrNull(previousRuntime),
+          );
+          if (
+            endpointRuntimeStatus.status !== "disabled" &&
+            endpointRuntimeStatus.status !== "running"
+          ) {
+            rollbackError = new EnvironmentCloudEndpointUnavailableError({
+              message:
+                "Managed endpoint runtime could not be restored after a failed configuration update.",
+              endpointRuntimeStatus,
+            });
+            yield* Effect.logError(rollbackError.message, { cause, endpointRuntimeStatus });
+          }
         }
       }),
     ),
+    Effect.mapError((error) => rollbackError ?? error),
   );
 }, cloudConfigSemaphore.withPermit);
 

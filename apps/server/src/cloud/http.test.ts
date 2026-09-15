@@ -172,36 +172,49 @@ describe("applyCloudRelayConfig", () => {
     }
   }
 
-  it.effect("restores secrets and the old connector when the new connector cannot start", () =>
-    Effect.gen(function* () {
-      const harness = makeHarness();
-      const nextRuntime = { ...oldRuntime, connectorToken: "new-token" };
-      const error = yield* Effect.flip(
-        applyCloudRelayConfig(
-          {
-            ...harness,
-            endpointRuntime: {
-              applyConfig: (config) =>
-                Effect.gen(function* () {
-                  yield* harness.endpointRuntime.applyConfig(config);
-                  return config === nextRuntime
-                    ? ({
-                        status: "failed",
-                        providerKind: "cloudflare_tunnel",
-                        reason: "cannot start",
-                      } as const)
-                    : ({ status: "running", providerKind: "cloudflare_tunnel", pid: 1 } as const);
-                }),
+  for (const restoredStatus of [
+    { status: "running", providerKind: "cloudflare_tunnel", pid: 1 },
+    { status: "failed", providerKind: "cloudflare_tunnel", reason: "cannot restore" },
+    { status: "unsupported", providerKind: "cloudflare_tunnel" },
+  ] as const) {
+    it.effect(`reports ${restoredStatus.status} runtime restoration after an update fails`, () =>
+      Effect.gen(function* () {
+        const harness = makeHarness();
+        const nextRuntime = { ...oldRuntime, connectorToken: "new-token" };
+        const updateStatus = {
+          status: "failed",
+          providerKind: "cloudflare_tunnel",
+          reason: "cannot start",
+        } as const;
+        const error = yield* Effect.flip(
+          applyCloudRelayConfig(
+            {
+              ...harness,
+              endpointRuntime: {
+                applyConfig: (config) =>
+                  Effect.gen(function* () {
+                    yield* harness.endpointRuntime.applyConfig(config);
+                    return config === nextRuntime ? updateStatus : restoredStatus;
+                  }),
+              },
             },
-          },
-          { ...payload, endpointRuntime: nextRuntime },
-        ),
-      );
-      expect(error._tag).toBe("EnvironmentCloudEndpointUnavailableError");
-      expect(harness.values).toEqual(harness.before);
-      expect(harness.runtimeCalls).toEqual([nextRuntime, oldRuntime]);
-    }),
-  );
+            { ...payload, endpointRuntime: nextRuntime },
+          ),
+        );
+        expect(error).toMatchObject({
+          _tag: "EnvironmentCloudEndpointUnavailableError",
+          message:
+            restoredStatus.status === "running"
+              ? "Managed endpoint runtime could not be started."
+              : "Managed endpoint runtime could not be restored after a failed configuration update.",
+          endpointRuntimeStatus:
+            restoredStatus.status === "running" ? updateStatus : restoredStatus,
+        });
+        expect(harness.values).toEqual(harness.before);
+        expect(harness.runtimeCalls).toEqual([nextRuntime, oldRuntime]);
+      }),
+    );
+  }
 
   for (const invalidRuntime of ["invalid-json", '{"providerKind":"cloudflare_tunnel"}']) {
     it.effect(`rejects a managed update with invalid saved config: ${invalidRuntime}`, () =>
