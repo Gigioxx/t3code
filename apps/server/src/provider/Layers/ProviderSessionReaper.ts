@@ -16,6 +16,7 @@ import { ProviderService } from "../Services/ProviderService.ts";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const CLOCK_JUMP_TOLERANCE_MS = 1_000;
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
@@ -33,12 +34,26 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+    let previousSweep: { wallMs: number; monotonicMs: number } | undefined;
+    let lastResumeMs = 0;
 
     const sweep = Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const monotonicMs = Number(yield* Clock.monotonicTimeNanos) / 1_000_000;
+      if (
+        previousSweep &&
+        now -
+          previousSweep.wallMs -
+          Math.min(monotonicMs - previousSweep.monotonicMs, sweepIntervalMs) >
+          CLOCK_JUMP_TOLERANCE_MS
+      ) {
+        // Monotonic clocks may include sleep, so also detect overdue sweeps.
+        // ponytail: scheduler stalls also grant grace; use power events for exact accounting.
+        lastResumeMs = now;
+      }
       // Stopped rows stay for their resume cursors and far outnumber live
       // ones, so the query skips them.
       const bindings = yield* directory.listBindings({ excludeStopped: true });
-      const now = yield* Clock.currentTimeMillis;
       let reapedCount = 0;
 
       for (const binding of bindings) {
@@ -52,7 +67,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        if (now - lastSeenMs < inactivityThresholdMs) {
+        if (now - Math.max(lastSeenMs, lastResumeMs) < inactivityThresholdMs) {
           continue;
         }
 
@@ -64,6 +79,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         // even though the binding was last touched when the turn was sent.
         const lastActivityMs = Math.max(
           lastSeenMs,
+          lastResumeMs,
           Date.parse(thread?.session?.updatedAt ?? binding.lastSeenAt),
         );
         const idleDurationMs = now - lastActivityMs;
@@ -123,6 +139,11 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           liveBindings: bindings.length,
         });
       }
+      // Measure only the scheduled wait, excluding time spent reaping sessions.
+      previousSweep = {
+        wallMs: yield* Clock.currentTimeMillis,
+        monotonicMs: Number(yield* Clock.monotonicTimeNanos) / 1_000_000,
+      };
     });
 
     const start: ProviderSessionReaperShape["start"] = () =>
