@@ -2204,7 +2204,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
                           : "debug3: packet.c:ssh_packet_send2_wrapped():1245 (bin=/usr/bin/ssh, pid=1): send packet: type 50\n",
                       )
                       .join(""),
-                  ).pipe(Stream.tap(() => Deferred.succeed(outputRead, undefined))),
+                  ).pipe(Stream.ensuring(Deferred.succeed(outputRead, undefined))),
                 ),
               });
             }),
