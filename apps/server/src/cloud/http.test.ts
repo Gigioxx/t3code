@@ -1,6 +1,9 @@
+import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -29,9 +32,20 @@ import {
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { CLOUD_CLI_DESIRED_LINK_SECRET } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
-import type { RelayLinkProofRequest } from "@t3tools/contracts/relay";
-import { CLOUD_ENDPOINT_RUNTIME_CONFIG, RELAY_URL_SECRET } from "./config.ts";
+import type {
+  RelayEnvironmentConfigRequest,
+  RelayLinkProofRequest,
+} from "@t3tools/contracts/relay";
 import {
+  CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_LINKED_USER_ID,
+  CLOUD_MINT_PUBLIC_KEY,
+  RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
+  RELAY_ISSUER_SECRET,
+  RELAY_URL_SECRET,
+} from "./config.ts";
+import {
+  applyCloudRelayConfig,
   consumeCloudReplayGuards,
   isSupportedLinkProviderKind,
   linkProofScopes,
@@ -54,6 +68,191 @@ const storeFailure = (tag: "AlreadyExists" | "PermissionDenied") =>
   });
 
 const unusedSecretStoreOperation = () => Effect.die("unused secret-store operation");
+
+describe("applyCloudRelayConfig", () => {
+  const publicKey = NodeCrypto.generateKeyPairSync("ed25519")
+    .publicKey.export({
+      type: "spki",
+      format: "pem",
+    })
+    .toString();
+  const payload: RelayEnvironmentConfigRequest = {
+    relayUrl: "https://new-relay.example.test",
+    relayIssuer: "https://new-issuer.example.test",
+    cloudUserId: "user_123",
+    environmentCredential: "new-credential",
+    cloudMintPublicKey: publicKey,
+    endpointRuntime: null,
+  };
+  const oldRuntime = {
+    providerKind: "cloudflare_tunnel",
+    connectorToken: "old-token",
+    tunnelId: "old-tunnel",
+  } as const;
+  const names = [
+    RELAY_URL_SECRET,
+    RELAY_ISSUER_SECRET,
+    CLOUD_LINKED_USER_ID,
+    RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
+    CLOUD_MINT_PUBLIC_KEY,
+    CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  ];
+
+  function makeHarness(linked = true) {
+    const values = new Map<string, Uint8Array>(
+      linked
+        ? names.map((name) => [
+            name,
+            new TextEncoder().encode(
+              name === CLOUD_LINKED_USER_ID
+                ? payload.cloudUserId
+                : name === CLOUD_ENDPOINT_RUNTIME_CONFIG
+                  ? JSON.stringify(oldRuntime)
+                  : `old-${name}`,
+            ),
+          ])
+        : [],
+    );
+    const before = new Map(values);
+    const runtimeCalls: Array<RelayEnvironmentConfigRequest["endpointRuntime"]> = [];
+    const secrets: ServerSecretStore.ServerSecretStore["Service"] = {
+      ...makeSecretStore(unusedSecretStoreOperation),
+      get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+      set: (name, value) =>
+        Effect.sync(() => {
+          values.set(name, value);
+        }),
+      remove: (name) =>
+        Effect.sync(() => {
+          values.delete(name);
+        }),
+    };
+    const endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"] = {
+      applyConfig: (config) =>
+        Effect.sync(() => {
+          runtimeCalls.push(config);
+          return { status: "disabled" };
+        }),
+    };
+    return { secrets, endpointRuntime, values, before, runtimeCalls };
+  }
+
+  for (const linked of [false, true]) {
+    for (const failAt of [1, 2, 3, 4, 5, 6]) {
+      for (const afterWrite of [false, true]) {
+        it.effect(
+          `restores ${linked ? "existing" : "absent"} secrets on failure ${afterWrite ? "after" : "before"} write ${failAt}`,
+          () =>
+            Effect.gen(function* () {
+              const harness = makeHarness(linked);
+              const failure = storeFailure("PermissionDenied");
+              let writes = 0;
+              const write = (name: string, value?: Uint8Array) =>
+                Effect.gen(function* () {
+                  const fail = ++writes === failAt;
+                  if (fail && !afterWrite) return yield* failure;
+                  yield* value ? harness.secrets.set(name, value) : harness.secrets.remove(name);
+                  if (fail) return yield* failure;
+                });
+              const error = yield* Effect.flip(
+                applyCloudRelayConfig(
+                  {
+                    ...harness,
+                    secrets: { ...harness.secrets, set: write, remove: (name) => write(name) },
+                  },
+                  payload,
+                ),
+              );
+              expect(error).toBe(failure);
+              expect(harness.values).toEqual(harness.before);
+              expect(harness.runtimeCalls).toEqual([]);
+            }),
+        );
+      }
+    }
+  }
+
+  it.effect("restores secrets and the old connector when the new connector cannot start", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const nextRuntime = { ...oldRuntime, connectorToken: "new-token" };
+      const error = yield* Effect.flip(
+        applyCloudRelayConfig(
+          {
+            ...harness,
+            endpointRuntime: {
+              applyConfig: (config) =>
+                Effect.gen(function* () {
+                  yield* harness.endpointRuntime.applyConfig(config);
+                  return config === nextRuntime
+                    ? ({
+                        status: "failed",
+                        providerKind: "cloudflare_tunnel",
+                        reason: "cannot start",
+                      } as const)
+                    : ({ status: "running", providerKind: "cloudflare_tunnel", pid: 1 } as const);
+                }),
+            },
+          },
+          { ...payload, endpointRuntime: nextRuntime },
+        ),
+      );
+      expect(error._tag).toBe("EnvironmentCloudEndpointUnavailableError");
+      expect(harness.values).toEqual(harness.before);
+      expect(harness.runtimeCalls).toEqual([nextRuntime, oldRuntime]);
+    }),
+  );
+
+  it.effect("rolls back an interrupted write before a queued relink proceeds", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      const entered = yield* Deferred.make<void>();
+      let writes = 0;
+      const first = yield* applyCloudRelayConfig(
+        {
+          ...harness,
+          secrets: {
+            ...harness.secrets,
+            set: (name, value) =>
+              Effect.gen(function* () {
+                yield* harness.secrets.set(name, value);
+                if (++writes === 2) {
+                  yield* Deferred.succeed(entered, undefined);
+                  return yield* Effect.never;
+                }
+              }),
+          },
+        },
+        payload,
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const second = yield* applyCloudRelayConfig(
+        {
+          ...harness,
+          secrets: {
+            ...harness.secrets,
+            get: (name) =>
+              Effect.gen(function* () {
+                expect(harness.values).toEqual(harness.before);
+                return yield* harness.secrets.get(name);
+              }),
+          },
+        },
+        {
+          ...payload,
+          relayUrl: "https://last-relay.example.test",
+        },
+      ).pipe(Effect.forkScoped);
+      yield* Fiber.interrupt(first);
+      yield* Fiber.join(second);
+      expect(new TextDecoder().decode(harness.values.get(RELAY_URL_SECRET))).toBe(
+        "https://last-relay.example.test",
+      );
+      expect(harness.values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(false);
+      expect(harness.runtimeCalls).toEqual([null]);
+    }).pipe(Effect.scoped),
+  );
+});
 
 function makeSecretStore(
   create: ServerSecretStore.ServerSecretStore["Service"]["create"],
