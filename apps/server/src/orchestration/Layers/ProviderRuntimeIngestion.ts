@@ -2036,12 +2036,12 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
+        yield* clearTurnStateForSession(thread.id);
         yield* dismissPendingApprovals(
           orchestrationEngine,
           yield* pendingApprovals.listPending({ threadId: thread.id }),
           now,
         );
-        yield* clearTurnStateForSession(thread.id);
       }
 
       if (event.type === "runtime.error") {

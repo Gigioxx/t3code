@@ -502,13 +502,22 @@ export const reconcileProviderSessions = Effect.gen(function* () {
   const liveThreadIds = new Set(
     (yield* providerService.listSessions()).map((session) => session.threadId),
   );
-  const pendingApprovals = yield* ProjectionPendingApprovalRepository;
-  yield* dismissPendingApprovals(
-    orchestrationEngine,
-    (yield* pendingApprovals.listPending({})).filter(
-      (approval) => !liveThreadIds.has(approval.threadId),
+  yield* Effect.gen(function* () {
+    const pendingApprovals = yield* ProjectionPendingApprovalRepository;
+    yield* dismissPendingApprovals(
+      orchestrationEngine,
+      (yield* pendingApprovals.listPending({})).filter(
+        (approval) => !liveThreadIds.has(approval.threadId),
+      ),
+      DateTime.formatIso(yield* DateTime.now),
+    );
+  }).pipe(
+    Effect.retry({ times: 1 }),
+    Effect.catchCause((cause) =>
+      Cause.hasInterrupts(cause)
+        ? Effect.failCause(cause)
+        : Effect.logWarning("failed to dismiss orphaned provider approvals", { cause }),
     ),
-    DateTime.formatIso(yield* DateTime.now),
   );
   const { threads } = yield* query.getCommandReadModel();
   // Provider startup can report ready before the continuation is submitted.
