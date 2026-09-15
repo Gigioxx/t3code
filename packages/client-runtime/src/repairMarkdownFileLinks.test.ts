@@ -33,6 +33,25 @@ describe("repairMarkdownFileLinks", () => {
   });
 
   it.each([
+    ["", true],
+    ["\\", false],
+    ["\\\\", true],
+    ["\\\\\\", false],
+    ["!", false],
+    ["\\!", true],
+    ["\\\\!", false],
+    ["\\\\\\!", true],
+  ])("respects CommonMark escape parity after %j", (prefix, isLink) => {
+    const source = `${prefix}[file](<./file.md)`;
+    const repaired = repairMarkdownFileLinks(source);
+    expect(repaired).toBe(isLink ? `${prefix}[file](<./file.md>)` : source);
+    const paragraph = unified().use(remarkParse).parse(repaired).children[0];
+    expect(
+      paragraph?.type === "paragraph" && paragraph.children.some((node) => node.type === "link"),
+    ).toBe(isLink);
+  });
+
+  it.each([
     "[file](<local/path/file.md>)",
     "[file](local/path/file.md)",
     "[web](<https://example.com/file.md)",

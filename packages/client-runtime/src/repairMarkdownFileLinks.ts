@@ -12,9 +12,19 @@ const UNCLOSED_FILE_LINK = /\[[^[\]\\\r\n]*\]\([ \t]*<([^<>()[\]\r\n"']+)\)/g;
 export function repairMarkdownFileLinks(markdown: string): string {
   if (!markdown.includes("](")) return markdown;
 
+  function isEscaped(index: number): boolean {
+    let start = index;
+    while (markdown[start - 1] === "\\") start -= 1;
+    return (index - start) % 2 === 1;
+  }
+
   const matches = Array.from(markdown.matchAll(UNCLOSED_FILE_LINK)).filter((match) => {
     const previous = markdown[match.index - 1];
-    return previous !== "!" && previous !== "\\" && parseMarkdownFileLink(match[1] ?? "");
+    return (
+      !isEscaped(match.index) &&
+      (previous !== "!" || isEscaped(match.index - 1)) &&
+      parseMarkdownFileLink(match[1] ?? "")
+    );
   });
   if (matches.length === 0) return markdown;
 
