@@ -22,6 +22,7 @@ type TransitionInput = {
   readonly previousAggregate: RelayAgentActivityAggregateState | null;
   readonly nextAggregate: RelayAgentActivityAggregateState;
   readonly preferences: RelayAgentAwarenessPreferences | null;
+  readonly nowMs: number;
 };
 
 function rowKey(row: RelayAgentActivityAggregateRow): string {
@@ -61,7 +62,8 @@ export function attentionTransitionRows(input: TransitionInput) {
     (row) =>
       isAttentionPhase(row.phase) &&
       !previouslyAttention.has(rowKey(row)) &&
-      alertAllowedForPhase(input.preferences, row.phase),
+      alertAllowedForPhase(input.preferences, row.phase) &&
+      isFreshNotification(row.updatedAt, input.nowMs),
   );
 }
 
@@ -88,7 +90,7 @@ export function newlyTerminalRows(
 }
 
 export function terminalTransitionRows(
-  input: TransitionInput & { readonly nowMs: number; readonly includeUnobserved?: boolean },
+  input: TransitionInput & { readonly includeUnobserved?: boolean },
 ) {
   return newlyTerminalRows(
     input.previousAggregate,
@@ -121,7 +123,7 @@ export function alertForAttentionTransition(input: TransitionInput): AgentActivi
 }
 
 export function alertForNewlyTerminal(
-  input: TransitionInput & { readonly nowMs: number; readonly includeUnobserved?: boolean },
+  input: TransitionInput & { readonly includeUnobserved?: boolean },
 ): AgentActivityAlert | null {
   return alertForActivityRows(terminalTransitionRows(input));
 }

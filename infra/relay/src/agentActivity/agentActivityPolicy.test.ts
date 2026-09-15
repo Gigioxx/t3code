@@ -48,6 +48,7 @@ describe("shared agent activity policy", () => {
           previousAggregate: aggregate(running),
           nextAggregate: next,
           preferences,
+          nowMs: 0,
         }),
       ).toMatchObject([{ threadId: state.threadId }]);
     },
@@ -81,6 +82,7 @@ describe("shared agent activity policy", () => {
         previousAggregate: aggregate([waiting]),
         nextAggregate: aggregate([waiting, other]),
         preferences,
+        nowMs: 0,
       }),
     ).toMatchObject([{ environmentId: other.environmentId }]);
   });

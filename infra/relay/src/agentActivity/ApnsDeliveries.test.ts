@@ -1843,6 +1843,7 @@ describe("live activity alert decisions", () => {
         activities: [...aggregate.activities, attentionRow],
       },
       preferences,
+      nowMs: 0,
     });
     expect(alert).toEqual({ title: "Blocked thread", body: "Approval: Project" });
   });
@@ -1858,6 +1859,7 @@ describe("live activity alert decisions", () => {
         previousAggregate: withAttention,
         nextAggregate: withAttention,
         preferences,
+        nowMs: 0,
       }),
     ).toBeNull();
   });
@@ -1868,6 +1870,7 @@ describe("live activity alert decisions", () => {
         previousAggregate: null,
         nextAggregate: { ...aggregate, activities: [attentionRow] },
         preferences,
+        nowMs: 0,
       }),
     ).toBeNull();
   });
@@ -1882,6 +1885,7 @@ describe("live activity alert decisions", () => {
           activities: [...aggregate.activities, attentionRow],
         },
         preferences: { ...preferences, notifyOnApproval: false },
+        nowMs: 0,
       }),
     ).toBeNull();
   });
@@ -1902,6 +1906,7 @@ describe("live activity alert decisions", () => {
         activities: [...aggregate.activities, attentionRow, secondAttentionRow],
       },
       preferences,
+      nowMs: 0,
     });
     expect(alert).toEqual({
       title: "2 agents need attention",
@@ -1985,6 +1990,54 @@ describe("live activity alert decisions", () => {
 });
 
 describe("queued iOS alert policy", () => {
+  for (const phase of ["waiting_for_input", "waiting_for_approval"] as const) {
+    for (const scenario of ["fresh", "stale at enqueue", "stale at delivery"] as const) {
+      it.effect(`${phase} keeps card updates and checks alerts that are ${scenario}`, () => {
+        const queuedJobs: SignedApnsDeliveryJob[] = [];
+        const requests: string[] = [];
+        const waiting = { ...state, phase };
+        const nextAggregate = {
+          ...aggregate,
+          activities: [{ ...aggregate.activities[0]!, phase }],
+        };
+        const device = { ...target, last_aggregate_json: JSON.stringify(aggregate) };
+        return Effect.gen(function* () {
+          const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+          const staleAtEnqueue = scenario === "stale at enqueue";
+          yield* TestClock.adjust(staleAtEnqueue ? 120_001 : 120_000);
+          yield* deliveries.sendForTarget({
+            target: device,
+            aggregate: nextAggregate,
+            nowMs: staleAtEnqueue ? 120_001 : 120_000,
+          });
+          expect(queuedJobs).toHaveLength(1);
+          expect(Boolean(queuedJobs[0]?.payload.alert)).toBe(!staleAtEnqueue);
+          if (scenario === "stale at delivery") yield* TestClock.adjust(1);
+          yield* deliveries.processSignedJob(queuedJobs[0]);
+          expect(requests).toHaveLength(1);
+          expect(requests[0]).toContain('"content-state"');
+          expect(requests[0]?.includes('"alert":')).toBe(scenario === "fresh");
+        }).pipe(
+          Effect.provide(
+            makeLayer({
+              attempts: [],
+              queuedJobs,
+              config: signingConfig,
+              currentTargets: [device],
+              activityStates: [waiting],
+              execute: (request) =>
+                Effect.sync(() => {
+                  if (request.body._tag === "Uint8Array")
+                    requests.push(new TextDecoder().decode(request.body.body));
+                  return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+                }),
+            }),
+          ),
+        );
+      });
+    }
+  }
+
   for (const scenario of ["enabled", "muted", "late"] as const) {
     it.effect(`checks the current policy for a ${scenario} completion`, () => {
       let sent = 0;
