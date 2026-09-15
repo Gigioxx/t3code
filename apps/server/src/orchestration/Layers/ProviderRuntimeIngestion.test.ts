@@ -3494,6 +3494,47 @@ describe("ProviderRuntimeIngestion", () => {
     expect(completionEvents).toHaveLength(1);
   });
 
+  it("dismisses pending approvals on session exit without a response", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const createdAt = "2026-01-01T00:00:01.000Z";
+    await harness.emitAndDrain(
+      ["command_execution_approval", "file_change_approval", "mcp_elicitation_approval"].map(
+        (requestType, index) => ({
+          type: "request.opened",
+          eventId: asEventId(`approval-open-${index}`),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          requestId: ApprovalRequestId.make(`approval-${index}`),
+          createdAt,
+          payload: { requestType, detail: "Approval before exit" },
+        }),
+      ),
+    );
+    expect((await harness.readThreadShell()).hasPendingApprovals).toBe(true);
+    for (const index of [1, 2]) {
+      await harness.emitAndDrain([
+        {
+          type: "session.exited",
+          eventId: asEventId(`approval-session-exit-${index}`),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        },
+      ]);
+    }
+    expect((await harness.readThreadShell()).hasPendingApprovals).toBe(false);
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId)!;
+    expect(
+      thread.activities.filter((activity) => activity.kind === "approval.resolved"),
+    ).toHaveLength(3);
+    await harness.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle-after-approval-exit"),
+      threadId,
+    });
+  });
+
   it("maps canonical request events into approval activities with requestKind", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

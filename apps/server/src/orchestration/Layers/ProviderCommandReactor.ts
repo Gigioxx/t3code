@@ -39,6 +39,9 @@ import {
   ProviderWorkspaceMissingError,
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
+import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
+import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
+import { dismissPendingApprovals } from "../dismissPendingApprovals.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -322,6 +325,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const pendingApprovals = yield* ProjectionPendingApprovalRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerAuthService = yield* ProviderAuthService;
   const providerService = yield* ProviderService;
@@ -1684,7 +1688,7 @@ const make = Effect.gen(function* () {
     }
     const hasSession = thread.session && thread.session.status !== "stopped";
     if (!hasSession) {
-      return yield* appendProviderFailureActivity({
+      yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.approval.respond.failed",
         summary: "Provider approval response failed",
@@ -1693,6 +1697,11 @@ const make = Effect.gen(function* () {
         createdAt: event.payload.createdAt,
         requestId: event.payload.requestId,
       });
+      return yield* dismissPendingApprovals(
+        orchestrationEngine,
+        yield* pendingApprovals.listPending({ threadId: thread.id }),
+        event.payload.createdAt,
+      );
     }
 
     yield* providerService
@@ -1987,4 +1996,6 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
+  Layer.provide(ProjectionPendingApprovalRepositoryLive),
+);

@@ -32,6 +32,9 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { formatTokens } from "@t3tools/shared/usageFormat";
 
+import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
+import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
+import { dismissPendingApprovals } from "../dismissPendingApprovals.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -974,6 +977,7 @@ const make = Effect.gen(function* () {
   const threadPlanProgress = yield* ThreadPlanProgressService;
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const pendingApprovals = yield* ProjectionPendingApprovalRepository;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionThreadMessages = yield* ProjectionThreadMessageRepository;
@@ -2032,6 +2036,11 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
+        yield* dismissPendingApprovals(
+          orchestrationEngine,
+          yield* pendingApprovals.listPending({ threadId: thread.id }),
+          now,
+        );
         yield* clearTurnStateForSession(thread.id);
       }
 
@@ -2312,6 +2321,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
   ProviderRuntimeIngestionService,
   make,
 ).pipe(
+  Layer.provide(ProjectionPendingApprovalRepositoryLive),
   Layer.provide(ProjectionThreadActivityRepositoryLive),
   Layer.provide(ProjectionThreadMessageRepositoryLive),
   Layer.provide(ProjectionThreadProposedPlanRepositoryLive),

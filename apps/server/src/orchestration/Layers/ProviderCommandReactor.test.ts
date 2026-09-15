@@ -3930,6 +3930,72 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  effectIt.effect.each(["missing", "stopped"] as const)(
+    "dismisses approvals when responding to a %s session and retains the failure",
+    (status) =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const threadId = ThreadId.make("thread-1");
+        const createdAt = "2026-01-01T00:00:01.000Z";
+        if (status === "stopped") {
+          yield* harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("seed-stopped-session"),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          });
+        }
+        yield* harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("seed-orphaned-approval"),
+          threadId,
+          activity: {
+            id: EventId.make("orphaned-approval"),
+            kind: "approval.requested",
+            tone: "approval",
+            summary: "Command approval requested",
+            payload: { requestId: "orphaned-approval", requestKind: "command" },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.approval.respond",
+          commandId: CommandId.make("respond-orphaned-approval"),
+          threadId,
+          requestId: asApprovalRequestId("orphaned-approval"),
+          decision: "accept",
+          createdAt,
+        });
+        yield* Effect.promise(() => harness.drain());
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === threadId,
+        )!;
+        expect(thread.activities).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ kind: "provider.approval.respond.failed" }),
+            expect.objectContaining({
+              kind: "approval.resolved",
+              payload: { requestId: "orphaned-approval" },
+            }),
+          ]),
+        );
+        const shell = yield* harness.snapshotQuery.getThreadShellById(threadId);
+        expect(Option.getOrThrow(shell).hasPendingApprovals).toBe(false);
+        expect(harness.respondToRequest).not.toHaveBeenCalled();
+      }),
+  );
+
   it("normalizes stale Codex approval callbacks without faking approval resolution", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
