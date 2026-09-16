@@ -1394,8 +1394,10 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     return true;
   }
 
+  // A late checkpoint can update the previous turn's timestamps without
+  // acknowledging the new send.
   return (
-    latestTurnChanged ||
+    input.localDispatch.latestTurnTurnId !== (latestTurn?.turnId ?? null) ||
     input.localDispatch.sessionStatus !== (session?.status ?? null) ||
     input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
   );
