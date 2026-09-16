@@ -771,6 +771,16 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         .pipe(Effect.ignore);
 
       yield* Effect.gen(function* () {
+        const sparseCone = yield* Effect.forEach(
+          ["core.sparseCheckout", "core.sparseCheckoutCone"],
+          (key) =>
+            execute({
+              operation,
+              cwd: input.cwd,
+              args: ["config", "--bool", "--get", key],
+              allowNonZeroExit: true,
+            }).pipe(Effect.map((result) => result.stdout.trim() === "true")),
+        ).pipe(Effect.map((values) => values.every(Boolean)));
         const headExists = yield* hasHeadCommit(input.cwd);
         if (headExists) {
           const reusedIndex = yield* Effect.gen(function* () {
@@ -792,8 +802,26 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
               args: ["-c", "core.fsmonitor=false", "read-tree", "--reset", "HEAD"],
               env: commitEnv,
             });
+            if (sparseCone) {
+              // Refresh assumed-unchanged files without listing or discarding sparse entries.
+              yield* execute({
+                operation,
+                cwd: input.cwd,
+                args: [
+                  ...WORKSPACE_GIT_HARDENED_CONFIG_ARGS,
+                  "-c",
+                  "core.ignorestat=false",
+                  "update-index",
+                  "-q",
+                  "--really-refresh",
+                  "--ignore-missing",
+                ],
+                env: commitEnv,
+              });
+            }
             // read-tree can rewrite the index, so restore its racy timestamp afterward.
             yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
+            if (sparseCone) return true;
             const entries = yield* execute({
               operation,
               cwd: input.cwd,
@@ -805,10 +833,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             return !entries.stdoutTruncated && !/^[a-zS] /m.test(entries.stdout);
           }).pipe(Effect.orElseSucceed(() => false));
           if (!reusedIndex) {
+            yield* cleanupTempIndex;
             yield* execute({
               operation,
               cwd: input.cwd,
-              args: ["read-tree", "HEAD"],
+              // Sparse-index conversion reapplies cone flags without touching working files.
+              args: sparseCone
+                ? ["-c", "index.sparse=true", "read-tree", "--reset", "HEAD"]
+                : ["read-tree", "HEAD"],
               env: commitEnv,
             });
           }
@@ -817,7 +849,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", "--", "."],
+          args: ["add", "-A", ...(sparseCone ? ["--sparse"] : []), "--", "."],
           env: commitEnv,
         });
 

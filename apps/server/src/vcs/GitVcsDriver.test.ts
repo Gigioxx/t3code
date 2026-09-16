@@ -275,6 +275,86 @@ for (const nested of [false, true]) {
   }
 }
 
+for (const sparseIndex of [false, true]) {
+  for (const indexState of ["normal", "assumed", "missing", "invalid"] as const) {
+    it.effect(
+      `checkpoint capture preserves sparse files (sparseIndex=${sparseIndex}, index=${indexState})`,
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const driver = yield* GitVcsDriver.makeVcsDriverShape();
+          const cwd = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-checkpoint-sparse-",
+          });
+          const { git, checkpointRef } = yield* makeCheckpointFixture(driver, cwd);
+          const write = (name: string, contents: string) =>
+            fileSystem.writeFileString(path.join(cwd, name), contents);
+          for (const directory of ["included", "excluded"]) {
+            yield* fileSystem.makeDirectory(path.join(cwd, directory));
+            yield* write(`${directory}/tracked`, "original\n");
+          }
+          yield* write("included/deleted", "original\n");
+          yield* git(["add", "."]);
+          yield* git(["commit", "-m", "sparse fixture"]);
+          yield* git([
+            "sparse-checkout",
+            "set",
+            "--cone",
+            sparseIndex ? "--sparse-index" : "--no-sparse-index",
+            "included",
+          ]);
+          if (indexState === "assumed") {
+            yield* git(["update-index", "--assume-unchanged", "included/tracked"]);
+          } else {
+            yield* write("included/tracked", "staged\n");
+            yield* git(["add", "included/tracked"]);
+          }
+          const indexPath = path.join(cwd, ".git", "index");
+          if (indexState === "missing") yield* fileSystem.remove(indexPath);
+          if (indexState === "invalid")
+            yield* fileSystem.writeFileString(indexPath, "invalid index");
+          const originalIndex = yield* fileSystem
+            .readFile(indexPath)
+            .pipe(Effect.orElseSucceed(() => null));
+          yield* write("included/tracked", "working\n");
+          yield* fileSystem.remove(path.join(cwd, "included/deleted"));
+          yield* write("included/new", "new\n");
+          yield* fileSystem.makeDirectory(path.join(cwd, "excluded"), { recursive: true });
+          yield* write("excluded/artifact", "artifact\n");
+
+          yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+
+          assert.strictEqual(
+            (yield* git(["show", `${checkpointRef}:included/tracked`])).stdout,
+            "working\n",
+          );
+          assert.strictEqual(
+            (yield* git(["show", `${checkpointRef}:included/new`])).stdout,
+            "new\n",
+          );
+          assert.strictEqual(
+            (yield* git(["show", `${checkpointRef}:excluded/tracked`])).stdout,
+            "original\n",
+          );
+          assert.strictEqual(
+            (yield* git(["show", `${checkpointRef}:excluded/artifact`])).stdout,
+            "artifact\n",
+          );
+          assert.notInclude(
+            (yield* git(["ls-tree", "-r", "--name-only", checkpointRef])).stdout,
+            "included/deleted",
+          );
+          assert.isFalse(yield* fileSystem.exists(path.join(cwd, "excluded/tracked")));
+          assert.deepEqual(
+            yield* fileSystem.readFile(indexPath).pipe(Effect.orElseSucceed(() => null)),
+            originalIndex,
+          );
+        }).pipe(Effect.scoped, Effect.provide(GitContractLayer)),
+    );
+  }
+}
+
 for (const indexState of ["missing", "invalid"] as const) {
   it.effect(`checkpoint capture falls back when the user index is ${indexState}`, () =>
     Effect.gen(function* () {
