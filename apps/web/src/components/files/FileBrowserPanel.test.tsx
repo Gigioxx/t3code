@@ -37,7 +37,7 @@ vi.mock("./useDirectoryEntries", () => ({
   useDirectoryEntries: () => {
     const [directories, setDirectories] = useState(new Map<string, readonly ProjectEntry[]>());
     const load = useCallback(async (path: string) => {
-      loads(path);
+      await loads(path);
       setDirectories((current) =>
         current.has(path) ? current : new Map(current).set(path, folders[path] ?? []),
       );
@@ -91,7 +91,7 @@ async function toggle(path: string) {
 }
 beforeEach(() => {
   storage.clear();
-  loads.mockClear();
+  loads.mockReset();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("document", { addEventListener() {}, removeEventListener() {} });
   vi.stubGlobal("window", {
@@ -178,4 +178,23 @@ it("persists collapse all and does not persist temporary search expansion", asyn
   await mount();
   expect(expanded("apps/")).toBe(false);
   expect(expanded("docs/")).toBe(false);
+});
+
+it("cancels pending restoration when collapse all is pressed", async () => {
+  storage.set(
+    't3code.fileTreeExpansion:["test","/repo"]',
+    JSON.stringify(["apps/", "apps/web/", "docs/"]),
+  );
+  let complete!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  loads.mockImplementation((path: string) => (path === "apps" ? pending : undefined));
+  await mount();
+  await act(async () => {
+    renderer!.root.findByProps({ "aria-label": "Collapse all folders" }).props.onClick();
+  });
+  await act(async () => complete());
+  expect(expanded("apps/")).toBe(false);
+  expect(expanded("apps/web/")).toBe(false);
 });
