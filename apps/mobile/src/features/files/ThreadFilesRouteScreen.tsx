@@ -536,6 +536,8 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
       <MaterialScreenContent insetHorizontal={layout.usesSplitView}>
         <FileTreeBrowser
           key={JSON.stringify([environmentId, cwd])}
+          environmentId={environmentId}
+          cwd={cwd}
           entries={entriesQuery.entries}
           loadedDirectories={entriesQuery.loadedDirectories}
           onLoadDirectory={entriesQuery.loadDirectory}

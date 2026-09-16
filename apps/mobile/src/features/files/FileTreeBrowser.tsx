@@ -1,6 +1,9 @@
-import type { ProjectEntry } from "@t3tools/contracts";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/unstable/reactivity";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { SymbolView } from "../../components/AppSymbol";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -107,6 +110,8 @@ const FileTreeRow = memo(function FileTreeRow(props: {
 });
 
 export function FileTreeBrowser(props: {
+  readonly environmentId: EnvironmentId;
+  readonly cwd: string;
   readonly entries: ReadonlyArray<ProjectEntry>;
   readonly error: string | null;
   readonly isPending: boolean;
@@ -119,7 +124,31 @@ export function FileTreeBrowser(props: {
   readonly onRefresh: () => void;
   readonly onSelectFile: (path: string) => void;
 }) {
-  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(() => new Set());
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const workspaceKey = JSON.stringify([props.environmentId, props.cwd]);
+  const storedPaths = AsyncResult.isSuccess(preferences)
+    ? preferences.value.fileTreeExpandedPaths
+    : undefined;
+  const expandedPaths = useMemo(
+    () => new Set(storedPaths?.[workspaceKey] ?? []),
+    [storedPaths, workspaceKey],
+  );
+  const expandedPathsRef = useRef(expandedPaths);
+  useLayoutEffect(() => {
+    expandedPathsRef.current = expandedPaths;
+  }, [expandedPaths]);
+  const setExpandedPaths = useCallback(
+    (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => {
+      if (!AsyncResult.isSuccess(preferences)) return;
+      const current = expandedPathsRef.current;
+      const next = update(current);
+      if (next.size === current.size && [...next].every((path) => current.has(path))) return;
+      expandedPathsRef.current = new Set(next);
+      savePreferences({ fileTreeExpandedPaths: { ...storedPaths, [workspaceKey]: [...next] } });
+    },
+    [preferences, savePreferences, storedPaths, workspaceKey],
+  );
   const [pendingSelection, setPendingSelection] = useState<{
     readonly path: string;
     readonly selectedPathAtPress: string | null;
@@ -154,10 +183,15 @@ export function FileTreeBrowser(props: {
     [expandedPaths, props.searchQuery, tree],
   );
 
+  const revealedPathRef = useRef<string | null>(null);
   useEffect(() => {
     if (!controlledSelectedPath) {
+      revealedPathRef.current = null;
       return;
     }
+    if (!AsyncResult.isSuccess(preferences) || revealedPathRef.current === controlledSelectedPath)
+      return;
+    revealedPathRef.current = controlledSelectedPath;
     setExpandedPaths((current) => {
       const ancestors = ancestorPaths(controlledSelectedPath);
       if (ancestors.every((ancestor) => current.has(ancestor))) {
@@ -169,11 +203,13 @@ export function FileTreeBrowser(props: {
       }
       return next;
     });
-  }, [controlledSelectedPath]);
+  }, [controlledSelectedPath, preferences, setExpandedPaths]);
 
   useEffect(() => {
-    for (const path of expandedPaths) onLoadDirectory(path);
-  }, [expandedPaths, onLoadDirectory]);
+    for (const entry of props.entries) {
+      if (entry.kind === "directory" && expandedPaths.has(entry.path)) onLoadDirectory(entry.path);
+    }
+  }, [expandedPaths, onLoadDirectory, props.entries]);
 
   useEffect(
     () => () => {
@@ -184,17 +220,20 @@ export function FileTreeBrowser(props: {
     [],
   );
 
-  const toggleDirectory = useCallback((path: string) => {
-    setExpandedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
+  const toggleDirectory = useCallback(
+    (path: string) => {
+      setExpandedPaths((current) => {
+        const next = new Set(current);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        return next;
+      });
+    },
+    [setExpandedPaths],
+  );
   const handleSelectFile = useCallback(
     (path: string) => {
       if (pendingSelectionTimeoutRef.current !== null) {
