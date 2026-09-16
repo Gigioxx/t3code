@@ -782,8 +782,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             }).pipe(Effect.map((result) => result.stdout.trim() === "true")),
         ).pipe(Effect.map((values) => values.every(Boolean)));
         const headExists = yield* hasHeadCommit(input.cwd);
+        let reusedIndex = false;
         if (headExists) {
-          const reusedIndex = yield* Effect.gen(function* () {
+          reusedIndex = yield* Effect.gen(function* () {
             const indexPath = yield* execute({
               operation,
               cwd: input.cwd,
@@ -803,6 +804,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
               env: commitEnv,
             });
             if (sparseCone) {
+              yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
               // Refresh assumed-unchanged files without listing or discarding sparse entries.
               yield* execute({
                 operation,
@@ -814,10 +816,18 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                   "update-index",
                   "-q",
                   "--really-refresh",
-                  "--ignore-missing",
                 ],
                 env: commitEnv,
               });
+              // Refresh leaves missing assumed-unchanged entries hidden from add.
+              const deleted = yield* execute({
+                operation,
+                cwd: input.cwd,
+                args: ["ls-files", "--deleted", "-z", "--", "."],
+                env: commitEnv,
+                maxOutputBytes: 1,
+              });
+              if (deleted.stdout.length > 0 || deleted.stdoutTruncated) return false;
             }
             // read-tree can rewrite the index, so restore its racy timestamp afterward.
             yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
@@ -837,10 +847,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             yield* execute({
               operation,
               cwd: input.cwd,
-              // Sparse-index conversion reapplies cone flags without touching working files.
-              args: sparseCone
-                ? ["-c", "index.sparse=true", "read-tree", "--reset", "HEAD"]
-                : ["read-tree", "HEAD"],
+              args: ["read-tree", "HEAD"],
               env: commitEnv,
             });
           }
@@ -849,9 +856,24 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", ...(sparseCone ? ["--sparse"] : []), "--", "."],
+          args: [
+            "add",
+            ...(sparseCone ? ["--sparse"] : []),
+            sparseCone && !reusedIndex ? "--ignore-removal" : "-A",
+            "--",
+            ".",
+          ],
           env: commitEnv,
         });
+        if (sparseCone && !reusedIndex) {
+          // Outside-cone files are now indexed; only apply deletions inside the cone.
+          yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: ["add", "-A", "--", "."],
+            env: commitEnv,
+          });
+        }
 
         const writeTreeResult = yield* execute({
           operation,

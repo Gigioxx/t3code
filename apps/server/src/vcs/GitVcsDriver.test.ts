@@ -276,7 +276,13 @@ for (const nested of [false, true]) {
 }
 
 for (const sparseIndex of [false, true]) {
-  for (const indexState of ["normal", "assumed", "missing", "invalid"] as const) {
+  for (const indexState of [
+    "normal",
+    "assumed",
+    "assumed-deleted",
+    "missing",
+    "invalid",
+  ] as const) {
     it.effect(
       `checkpoint capture preserves sparse files (sparseIndex=${sparseIndex}, index=${indexState})`,
       () =>
@@ -290,7 +296,7 @@ for (const sparseIndex of [false, true]) {
           const { git, checkpointRef } = yield* makeCheckpointFixture(driver, cwd);
           const write = (name: string, contents: string) =>
             fileSystem.writeFileString(path.join(cwd, name), contents);
-          for (const directory of ["included", "excluded"]) {
+          for (const directory of ["included", "included/empty", "excluded"]) {
             yield* fileSystem.makeDirectory(path.join(cwd, directory));
             yield* write(`${directory}/tracked`, "original\n");
           }
@@ -299,13 +305,25 @@ for (const sparseIndex of [false, true]) {
           yield* git(["commit", "-m", "sparse fixture"]);
           yield* git([
             "sparse-checkout",
-            "set",
+            "init",
             "--cone",
             sparseIndex ? "--sparse-index" : "--no-sparse-index",
-            "included",
           ]);
+          yield* git(["sparse-checkout", "set", "included"]);
           if (indexState === "assumed") {
+            yield* git(["config", "core.trustctime", "false"]);
+            yield* fileSystem.utimes(
+              path.join(cwd, "included/tracked"),
+              1_700_000_000,
+              1_700_000_000,
+            );
+            yield* git(["add", "included/tracked"]);
+          }
+          if (indexState === "assumed" || indexState === "assumed-deleted") {
             yield* git(["update-index", "--assume-unchanged", "included/tracked"]);
+            if (indexState === "assumed-deleted") {
+              yield* git(["update-index", "--assume-unchanged", "included/deleted"]);
+            }
           } else {
             yield* write("included/tracked", "staged\n");
             yield* git(["add", "included/tracked"]);
@@ -314,11 +332,24 @@ for (const sparseIndex of [false, true]) {
           if (indexState === "missing") yield* fileSystem.remove(indexPath);
           if (indexState === "invalid")
             yield* fileSystem.writeFileString(indexPath, "invalid index");
+          if (indexState === "assumed") {
+            yield* fileSystem.utimes(indexPath, 1_700_000_000, 1_700_000_000);
+          }
           const originalIndex = yield* fileSystem
             .readFile(indexPath)
             .pipe(Effect.orElseSucceed(() => null));
-          yield* write("included/tracked", "working\n");
-          yield* fileSystem.remove(path.join(cwd, "included/deleted"));
+          yield* write("included/tracked", "modified\n");
+          if (indexState === "assumed") {
+            yield* fileSystem.utimes(
+              path.join(cwd, "included/tracked"),
+              1_700_000_000,
+              1_700_000_000,
+            );
+          }
+          if (indexState !== "assumed") {
+            yield* fileSystem.remove(path.join(cwd, "included/deleted"));
+            yield* fileSystem.remove(path.join(cwd, "included/empty"), { recursive: true });
+          }
           yield* write("included/new", "new\n");
           yield* fileSystem.makeDirectory(path.join(cwd, "excluded"), { recursive: true });
           yield* write("excluded/artifact", "artifact\n");
@@ -327,7 +358,7 @@ for (const sparseIndex of [false, true]) {
 
           assert.strictEqual(
             (yield* git(["show", `${checkpointRef}:included/tracked`])).stdout,
-            "working\n",
+            "modified\n",
           );
           assert.strictEqual(
             (yield* git(["show", `${checkpointRef}:included/new`])).stdout,
@@ -341,9 +372,17 @@ for (const sparseIndex of [false, true]) {
             (yield* git(["show", `${checkpointRef}:excluded/artifact`])).stdout,
             "artifact\n",
           );
-          assert.notInclude(
-            (yield* git(["ls-tree", "-r", "--name-only", checkpointRef])).stdout,
-            "included/deleted",
+          assert.strictEqual(
+            (yield* git(["ls-tree", "-r", "--name-only", checkpointRef])).stdout.includes(
+              "included/deleted",
+            ),
+            indexState === "assumed",
+          );
+          assert.strictEqual(
+            (yield* git(["ls-tree", "-r", "--name-only", checkpointRef])).stdout.includes(
+              "included/empty/tracked",
+            ),
+            indexState === "assumed",
           );
           assert.isFalse(yield* fileSystem.exists(path.join(cwd, "excluded/tracked")));
           assert.deepEqual(
