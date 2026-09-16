@@ -1286,7 +1286,6 @@ export interface LocalDispatchSnapshot {
   latestTurnStartedAt: string | null;
   latestTurnCompletedAt: string | null;
   sessionStatus: NonNullable<Thread["session"]>["status"] | null;
-  sessionUpdatedAt: string | null;
   latestTurnStartFailureId: string | null;
 }
 
@@ -1327,7 +1326,6 @@ export function createLocalDispatchSnapshot(
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
     latestTurnCompletedAt: latestTurn?.completedAt ?? null,
     sessionStatus: session?.status ?? null,
-    sessionUpdatedAt: session?.updatedAt ?? null,
     latestTurnStartFailureId: latestTurnStartFailureId(activeThread, latestUserMessage?.id ?? null),
   };
 }
@@ -1394,12 +1392,11 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     return true;
   }
 
-  // A late checkpoint can update the previous turn's timestamps without
-  // acknowledging the new send.
+  // Late checkpoint/session updates do not acknowledge a new turn. A steer
+  // can be acknowledged after its original turn has already ended.
   return (
     input.localDispatch.latestTurnTurnId !== (latestTurn?.turnId ?? null) ||
-    input.localDispatch.sessionStatus !== (session?.status ?? null) ||
-    input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
+    (input.localDispatch.sessionStatus === "running" && latestUserMessageChanged)
   );
 }
 
