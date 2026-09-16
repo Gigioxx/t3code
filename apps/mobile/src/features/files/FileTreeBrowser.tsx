@@ -3,7 +3,16 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { SymbolView } from "../../components/AppSymbol";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -127,27 +136,50 @@ export function FileTreeBrowser(props: {
   const preferences = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const workspaceKey = JSON.stringify([props.environmentId, props.cwd]);
+  const preferencesReady = AsyncResult.isSuccess(preferences);
   const storedPaths = AsyncResult.isSuccess(preferences)
     ? preferences.value.fileTreeExpandedPaths
     : undefined;
-  const expandedPaths = useMemo(
-    () => new Set(storedPaths?.[workspaceKey] ?? []),
-    [storedPaths, workspaceKey],
+  // Local changes win over late preference loads and failed saves.
+  const [expansionChanges, setExpansionChanges] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
   );
+  const expandedPaths = useMemo(() => {
+    const paths = new Set(storedPaths?.[workspaceKey] ?? []);
+    for (const [path, expanded] of expansionChanges) {
+      if (expanded) paths.add(path);
+      else paths.delete(path);
+    }
+    return paths;
+  }, [expansionChanges, storedPaths, workspaceKey]);
+  const persistExpansion = useEffectEvent(() => {
+    savePreferences({
+      fileTreeExpandedPaths: { ...storedPaths, [workspaceKey]: [...expandedPaths] },
+    });
+  });
+  // A preference rollback must not trigger another write.
+  useEffect(() => {
+    if (preferencesReady && expansionChanges.size > 0) persistExpansion();
+  }, [expansionChanges, preferencesReady]);
   const expandedPathsRef = useRef(expandedPaths);
   useLayoutEffect(() => {
     expandedPathsRef.current = expandedPaths;
   }, [expandedPaths]);
   const setExpandedPaths = useCallback(
     (update: (current: ReadonlySet<string>) => ReadonlySet<string>) => {
-      if (!AsyncResult.isSuccess(preferences)) return;
       const current = expandedPathsRef.current;
       const next = update(current);
       if (next.size === current.size && [...next].every((path) => current.has(path))) return;
       expandedPathsRef.current = new Set(next);
-      savePreferences({ fileTreeExpandedPaths: { ...storedPaths, [workspaceKey]: [...next] } });
+      setExpansionChanges((changes) => {
+        const result = new Map(changes);
+        for (const path of new Set([...current, ...next])) {
+          if (current.has(path) !== next.has(path)) result.set(path, next.has(path));
+        }
+        return result;
+      });
     },
-    [preferences, savePreferences, storedPaths, workspaceKey],
+    [],
   );
   const [pendingSelection, setPendingSelection] = useState<{
     readonly path: string;
@@ -189,8 +221,7 @@ export function FileTreeBrowser(props: {
       revealedPathRef.current = null;
       return;
     }
-    if (!AsyncResult.isSuccess(preferences) || revealedPathRef.current === controlledSelectedPath)
-      return;
+    if (revealedPathRef.current === controlledSelectedPath) return;
     revealedPathRef.current = controlledSelectedPath;
     const ancestors = ancestorPaths(controlledSelectedPath);
     for (const ancestor of ancestors) onLoadDirectory(ancestor);
@@ -204,7 +235,7 @@ export function FileTreeBrowser(props: {
       }
       return next;
     });
-  }, [controlledSelectedPath, onLoadDirectory, preferences, setExpandedPaths]);
+  }, [controlledSelectedPath, onLoadDirectory, setExpandedPaths]);
 
   useEffect(() => {
     // ponytail: skip stale saved paths; prune them if preference size becomes a problem.
