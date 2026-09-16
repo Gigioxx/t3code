@@ -2911,6 +2911,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         assert.ok(!ids.includes("old-background"));
       };
 
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        ) VALUES
+          ('malformed-task', 'thread-w', 'turn-1', 'info', 'task.started', 'Legacy task',
+            '{invalid', 68, '2026-03-01T00:00:30.000Z'),
+          ('malformed-heartbeat', 'thread-w', 'turn-1', 'info', 'tool.progress', 'Legacy heartbeat',
+            '{invalid', 69, '2026-03-01T00:00:30.000Z')
+      `;
+
       const window = Option.getOrThrow(
         yield* query.getThreadDetailSnapshot(threadW, { turnLimit: 1 }),
       );

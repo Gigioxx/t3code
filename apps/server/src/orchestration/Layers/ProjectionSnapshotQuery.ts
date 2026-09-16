@@ -1837,11 +1837,13 @@ pending_approval_requests AS (
           FROM projection_thread_activities
           WHERE thread_id = ${threadId}
             AND kind IN ('task.started', 'task.progress', 'task.updated', 'task.completed', 'tool.progress')
+            AND json_valid(payload_json)
             AND json_extract(payload_json, '$.taskId') IN (
               SELECT json_extract(payload_json, '$.taskId')
               FROM projection_thread_activities
               WHERE thread_id = ${threadId}
                 AND kind IN ('task.started', 'task.progress', 'task.updated', 'task.completed')
+                AND json_valid(payload_json)
                 AND json_extract(payload_json, '$.agentKind') = 'agent'
             )
           UNION ALL
