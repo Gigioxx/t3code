@@ -297,6 +297,7 @@ export default function FileBrowserPanel({
   );
   const toggleAllDirectories = () => {
     const expanded = !(expandAll || allDirectoriesExpanded);
+    if (!expanded) restoringPathsRef.current?.clear();
     setExpandAll(expanded);
     setAllDirectoriesExpanded(model, directoryPaths, expanded);
   };

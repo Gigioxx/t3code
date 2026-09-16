@@ -192,8 +192,9 @@ export function FileTreeBrowser(props: {
     if (!AsyncResult.isSuccess(preferences) || revealedPathRef.current === controlledSelectedPath)
       return;
     revealedPathRef.current = controlledSelectedPath;
+    const ancestors = ancestorPaths(controlledSelectedPath);
+    for (const ancestor of ancestors) onLoadDirectory(ancestor);
     setExpandedPaths((current) => {
-      const ancestors = ancestorPaths(controlledSelectedPath);
       if (ancestors.every((ancestor) => current.has(ancestor))) {
         return current;
       }
@@ -203,9 +204,10 @@ export function FileTreeBrowser(props: {
       }
       return next;
     });
-  }, [controlledSelectedPath, preferences, setExpandedPaths]);
+  }, [controlledSelectedPath, onLoadDirectory, preferences, setExpandedPaths]);
 
   useEffect(() => {
+    // ponytail: skip stale saved paths; prune them if preference size becomes a problem.
     for (const entry of props.entries) {
       if (entry.kind === "directory" && expandedPaths.has(entry.path)) onLoadDirectory(entry.path);
     }
