@@ -1569,10 +1569,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : null;
   const attachmentDraftTarget = questionAttachmentTarget ?? composerDraftTarget;
   const attachmentDraft = useComposerThreadDraft(attachmentDraftTarget);
-  // Same gate as the attach button: SnapShots only follow a question that can take attachments.
+  // Same gate as dropped files: SnapShots only follow a question that can still take attachments.
   const questionAcceptsSnapShots =
     supportsQuestionAttachments &&
-    activePendingProgress?.activeQuestion?.allowCustomAnswer !== false;
+    activePendingProgress?.activeQuestion?.allowCustomAnswer !== false &&
+    !activePendingIsResponding;
   useEffect(() => {
     if (!questionAttachmentTarget || !questionAcceptsSnapShots) return;
     return trackOpenQuestionAttachmentDraft(routeThreadRef, questionAttachmentTarget);

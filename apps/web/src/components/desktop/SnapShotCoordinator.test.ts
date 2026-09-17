@@ -324,9 +324,10 @@ describe("open question delivery", () => {
       acknowledgeSnapShot: vi.fn(async () => undefined),
     } as unknown as DesktopSnapShotBridge;
     vi.stubGlobal("window", { localStorage: storage, dispatchEvent: vi.fn() });
+    const pins = new Map<string, DraftId | null>();
     const untrack = trackOpenQuestionAttachmentDraft(threadRef, questionDraft);
     try {
-      const target = resolveSnapShotAttachmentTarget(threadRef);
+      const target = resolveSnapShotAttachmentTarget(pins, capture.id, threadRef);
       expect(target).toBe(questionDraft);
       await deliverSnapShot(bridge, capture, target);
       const store = useComposerDraftStore.getState();
@@ -337,7 +338,27 @@ describe("open question delivery", () => {
     } finally {
       untrack();
     }
-    expect(resolveSnapShotAttachmentTarget(threadRef)).toEqual(threadRef);
+    expect(resolveSnapShotAttachmentTarget(pins, capture.id, threadRef)).toEqual(threadRef);
+  });
+
+  it("keeps a capture on the question it was pinned to, never a newer one", () => {
+    const threadRef = scopeThreadRef(environmentId, ThreadId.make("question-thread"));
+    const requestId = ApprovalRequestId.make("request-1");
+    const first = questionAttachmentDraftId(environmentId, threadRef.threadId, requestId, "q1");
+    const second = questionAttachmentDraftId(environmentId, threadRef.threadId, requestId, "q2");
+    const pins = new Map<string, DraftId | null>();
+
+    const untrackNone = trackOpenQuestionAttachmentDraft(threadRef, first);
+    untrackNone();
+    expect(resolveSnapShotAttachmentTarget(pins, "before-question", threadRef)).toEqual(threadRef);
+    const untrackFirst = trackOpenQuestionAttachmentDraft(threadRef, first);
+    expect(resolveSnapShotAttachmentTarget(pins, "before-question", threadRef)).toEqual(threadRef);
+    expect(resolveSnapShotAttachmentTarget(pins, "during-first", threadRef)).toBe(first);
+    untrackFirst();
+    const untrackSecond = trackOpenQuestionAttachmentDraft(threadRef, second);
+    expect(resolveSnapShotAttachmentTarget(pins, "during-first", threadRef)).toEqual(threadRef);
+    expect(resolveSnapShotAttachmentTarget(pins, "during-second", threadRef)).toBe(second);
+    untrackSecond();
   });
 });
 

@@ -59,8 +59,21 @@ export function resolveExistingSnapShotTarget(
 }
 
 // While a question is open its draft owns attachments, so captures land where drag-drop does.
-export function resolveSnapShotAttachmentTarget(target: CaptureTarget): CaptureTarget {
-  return typeof target === "string" ? target : (openQuestionAttachmentDraft(target) ?? target);
+// The question is pinned when the capture is first seen so the animation and the delivery agree;
+// a question that closed before delivery falls back to the thread draft instead of a newer one.
+export function resolveSnapShotAttachmentTarget(
+  pins: Map<string, DraftId | null>,
+  id: string,
+  target: CaptureTarget,
+): CaptureTarget {
+  if (typeof target === "string") return target;
+  const open = openQuestionAttachmentDraft(target);
+  const pinned = pins.get(id);
+  if (pinned === undefined) {
+    pins.set(id, open);
+    return open ?? target;
+  }
+  return pinned !== null && pinned === open ? pinned : target;
 }
 
 const NEXT_PAINT_FALLBACK_MS = 100;
@@ -74,7 +87,7 @@ export async function beginSnapShotAnimationWhenReady(
   try {
     const resolvedTarget = await target;
     if (pendingStarts.delete(id) && resolvedTarget) {
-      beginSnapShotAnimation(id, resolveSnapShotAttachmentTarget(resolvedTarget));
+      beginSnapShotAnimation(id, resolvedTarget);
     }
   } finally {
     pendingStarts.delete(id);
@@ -219,6 +232,7 @@ export function SnapShotCoordinator() {
   );
   const animateCaptures = useClientSettings((settings) => settings.snapShotAnimations);
   const captureTargetsRef = useRef(new Map<string, Promise<CaptureTarget | null>>());
+  const questionPinsRef = useRef(new Map<string, DraftId | null>());
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
@@ -304,8 +318,13 @@ export function SnapShotCoordinator() {
           }
 
           try {
-            await deliverSnapShot(bridge, item, resolveSnapShotAttachmentTarget(target));
+            await deliverSnapShot(
+              bridge,
+              item,
+              resolveSnapShotAttachmentTarget(questionPinsRef.current, item.id, target),
+            );
             captureTargetsRef.current.delete(item.id);
+            questionPinsRef.current.delete(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
           } catch (error) {
             await dismissSnapShotAnimation(item.id);
@@ -352,6 +371,7 @@ export function SnapShotCoordinator() {
           // Creating a new draft would navigate the renderer before a self-capture finishes.
           // Pin existing drafts now; create a destination after acquisition when none exists.
           if (target) {
+            resolveSnapShotAttachmentTarget(questionPinsRef.current, event.id, target);
             void resolveSnapShotDeliveryTarget(captureTargetsRef.current, event.id, () =>
               Promise.resolve(target),
             );
@@ -367,6 +387,10 @@ export function SnapShotCoordinator() {
                 captureTargetsRef.current,
                 event.id,
                 resolveCaptureTarget,
+              ).then(
+                (target) =>
+                  target &&
+                  resolveSnapShotAttachmentTarget(questionPinsRef.current, event.id, target),
               ),
               pendingAnimationStartsRef.current,
             );
@@ -377,7 +401,10 @@ export function SnapShotCoordinator() {
           void drain();
           return;
         case "failed": {
-          if (event.id) captureTargetsRef.current.delete(event.id);
+          if (event.id) {
+            captureTargetsRef.current.delete(event.id);
+            questionPinsRef.current.delete(event.id);
+          }
           dismissFailedSnapShot(
             event.id,
             soundedCaptureIdsRef.current,
