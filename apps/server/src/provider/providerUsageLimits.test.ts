@@ -62,6 +62,34 @@ describe("applyUsageLimitsUpdate", () => {
     ).toBe(published);
   });
 
+  it("keeps a failed probe marked when a sparse update lands on it", () => {
+    // A `rate_limit_event` names one window. Merged onto a failed or missing
+    // probe it must not read as the full set, or a later failed probe keeps
+    // it as last-good.
+    const failed = {
+      checkedAt,
+      windows: [],
+      unavailable: { reason: "probeFailed" as const, message: "usage timed out" },
+    };
+    const partial = applyUsageLimitsUpdate({
+      previous: failed,
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      update: { windows: [weekly] },
+    });
+    expect(partial).toEqual({
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      windows: [weekly],
+      unavailable: failed.unavailable,
+    });
+    expect(
+      applyUsageLimitsUpdate({ previous: partial, checkedAt, update: { windows: [weekly] } }),
+    ).toBe(partial);
+    expect(
+      applyUsageLimitsUpdate({ previous: undefined, checkedAt, update: { windows: [weekly] } }),
+    ).toEqual({ checkedAt, windows: [weekly], unavailable: { reason: "probeFailed" } });
+    expect(resolveUsageLimitsAfterProbe({ published: partial, probed: failed })).toBe(failed);
+  });
+
   it("preserves reset credits when a streamed window update changes usage", () => {
     const resetCredits = { availableCount: 2, nextExpiresAt: "2026-10-01T00:00:00.000Z" };
     const next = applyUsageLimitsUpdate({
