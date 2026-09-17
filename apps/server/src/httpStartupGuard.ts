@@ -1,3 +1,4 @@
+// Hooks the raw Node http.Server before Effect attaches its handlers.
 // @effect-diagnostics nodeBuiltinImport:off
 import type * as NodeHttp from "node:http";
 import type * as NodeStream from "node:stream";
