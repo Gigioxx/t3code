@@ -31,6 +31,7 @@ import {
   getDesktopSnapShotBridge,
   type DesktopSnapShotBridge,
 } from "../../lib/desktopSnapShot";
+import { openQuestionAttachmentDraft } from "../../questionAttachments";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
@@ -57,6 +58,11 @@ export function resolveExistingSnapShotTarget(
     : null;
 }
 
+// While a question is open its draft owns attachments, so captures land where drag-drop does.
+export function resolveSnapShotAttachmentTarget(target: CaptureTarget): CaptureTarget {
+  return typeof target === "string" ? target : (openQuestionAttachmentDraft(target) ?? target);
+}
+
 const NEXT_PAINT_FALLBACK_MS = 100;
 
 export async function beginSnapShotAnimationWhenReady(
@@ -68,7 +74,7 @@ export async function beginSnapShotAnimationWhenReady(
   try {
     const resolvedTarget = await target;
     if (pendingStarts.delete(id) && resolvedTarget) {
-      beginSnapShotAnimation(id, resolvedTarget);
+      beginSnapShotAnimation(id, resolveSnapShotAttachmentTarget(resolvedTarget));
     }
   } finally {
     pendingStarts.delete(id);
@@ -150,18 +156,23 @@ export async function deliverSnapShot(
   const dataUrl = compressed.recompressed ? await readFileAsDataUrl(file) : capture.dataUrl;
   const alreadyAttached =
     store.getComposerDraft(target)?.images.some(({ id }) => id === capture.id) ?? false;
+  // `addImage` refuses drafts without a thread session, which a question draft never has.
   if (
     !alreadyAttached &&
-    !store.addImage(target, {
-      type: "image",
-      id: capture.id,
-      name: file.name,
-      mimeType: file.type,
-      sizeBytes: file.size,
-      previewUrl: dataUrl,
-      file,
-      source,
-    })
+    !store
+      .addImages(target, [
+        {
+          type: "image",
+          id: capture.id,
+          name: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          previewUrl: dataUrl,
+          file,
+          source,
+        },
+      ])
+      .includes(capture.id)
   ) {
     throw new Error("Remove an attachment, then try this capture again.");
   }
@@ -293,7 +304,7 @@ export function SnapShotCoordinator() {
           }
 
           try {
-            await deliverSnapShot(bridge, item, target);
+            await deliverSnapShot(bridge, item, resolveSnapShotAttachmentTarget(target));
             captureTargetsRef.current.delete(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
           } catch (error) {
