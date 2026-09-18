@@ -3946,6 +3946,61 @@ describe("ProviderCommandReactor", () => {
       }),
   );
 
+  effectIt.effect("marks a failed thread.session.start restore as error, not starting", () =>
+    Effect.gen(function* () {
+      const attempted = yield* Deferred.make<void>();
+      const missingWorkspace = new ProviderWorkspaceMissingError({
+        threadId: ThreadId.make("thread-1"),
+        cwd: "/missing/project/worktree",
+      });
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          startSessionEffect: () =>
+            Deferred.succeed(attempted, undefined).pipe(
+              Effect.andThen(Effect.fail(missingWorkspace)),
+            ),
+        }),
+      );
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-1");
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-stopped-before-wake"),
+        threadId,
+        session: {
+          threadId,
+          status: "stopped",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.session.start",
+        commandId: CommandId.make("cmd-session-start-fails"),
+        threadId,
+        createdAt: now,
+      });
+      yield* Deferred.await(attempted);
+      yield* Effect.promise(() => harness.drain());
+
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.session).toMatchObject({
+        status: "error",
+        activeTurnId: null,
+        lastError: missingWorkspace.message,
+      });
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+    }),
+  );
+
   it("rejects active runtime sessions that are missing provider instance ids", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

@@ -1840,10 +1840,24 @@ const make = Effect.gen(function* () {
             createdAt: event.occurredAt,
           });
         }
+        yield* ensureThreadWorktree(thread);
         const resume = ensureSessionForThread(event.payload.threadId, event.occurredAt);
-        yield* thread.worktreePath
-          ? withWorkspaceLease(path.resolve(thread.worktreePath), resume)
-          : resume;
+        yield* (
+          thread.worktreePath
+            ? withWorkspaceLease(path.resolve(thread.worktreePath), resume)
+            : resume
+        ).pipe(
+          // Leave a failed restore as an error, not a lying "starting".
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : setThreadSessionErrorOnTurnStartFailure({
+                  threadId: event.payload.threadId,
+                  detail: formatFailureDetail(cause),
+                  createdAt: event.occurredAt,
+                }),
+          ),
+        );
         return;
       }
       case "thread.settled": {
