@@ -326,6 +326,7 @@ describe("ProviderSessionReaper", () => {
     async (status) => {
       const threadId = ThreadId.make(`thread-reaper-claude-messaging-${status}`);
       const now = "2026-01-01T00:00:00.000Z";
+      const lastSeenAt = "2026-04-14T00:00:00.000Z";
       const harness = await createHarness({
         activeSessions: [
           {
@@ -364,7 +365,7 @@ describe("ProviderSessionReaper", () => {
           adapterKey: "claudeAgent",
           runtimeMode: "full-access",
           status: "running",
-          lastSeenAt: "2026-04-14T00:00:00.000Z",
+          lastSeenAt,
           resumeCursor: {
             opaque: "resume-claude-messaging",
           },
@@ -372,8 +373,7 @@ describe("ProviderSessionReaper", () => {
         }),
       );
 
-      await startReaper();
-      await runtime!.runPromise(drainFibers);
+      await sweepAt(Date.parse(lastSeenAt) + 1_000);
 
       expect(harness.stopSession).not.toHaveBeenCalled();
       const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
