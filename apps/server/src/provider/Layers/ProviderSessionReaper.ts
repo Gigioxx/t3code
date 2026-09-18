@@ -38,10 +38,22 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       // Stopped rows stay for their resume cursors and far outnumber live
       // ones, so the query skips them.
       const bindings = yield* directory.listBindings({ excludeStopped: true });
-      const liveClaudeThreadIds = new Set(
-        (yield* providerService.listSessions())
-          .filter((session) => session.provider === "claudeAgent")
-          .map((session) => session.threadId),
+      // An unknown live set keeps every Claude session instead of aborting the
+      // sweep, so other providers are still reaped.
+      const liveClaudeThreadIds = yield* providerService.listSessions().pipe(
+        Effect.map(
+          (sessions) =>
+            new Set(
+              sessions
+                .filter((session) => session.provider === "claudeAgent")
+                .map((session) => session.threadId),
+            ),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.session.reaper.live-sessions-failed", { cause }).pipe(
+            Effect.as(undefined),
+          ),
+        ),
       );
       const now = yield* Clock.currentTimeMillis;
       let reapedCount = 0;
@@ -99,7 +111,10 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         // Claude's process is also its cross-session messaging endpoint, so
         // a live idle session must remain addressable by its peers.
-        if (binding.provider === "claudeAgent" && liveClaudeThreadIds.has(binding.threadId)) {
+        if (
+          binding.provider === "claudeAgent" &&
+          (liveClaudeThreadIds === undefined || liveClaudeThreadIds.has(binding.threadId))
+        ) {
           yield* Effect.logDebug("provider.session.reaper.skipped-messaging-endpoint", {
             threadId: binding.threadId,
             provider: binding.provider,

@@ -177,6 +177,7 @@ describe("ProviderSessionReaper", () => {
   async function createHarness(input: {
     readonly readModel: ReturnType<typeof makeReadModel>;
     readonly activeSessions?: ReadonlyArray<ProviderSession>;
+    readonly listSessionsImplementation?: () => ReturnType<ProviderServiceShape["listSessions"]>;
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
@@ -199,7 +200,8 @@ describe("ProviderSessionReaper", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
-      listSessions: () => Effect.succeed(input.activeSessions ?? []),
+      listSessions:
+        input.listSessionsImplementation ?? (() => Effect.succeed(input.activeSessions ?? [])),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
       assertConversationRollbackSupported: () => unsupported(),
       getInstanceInfo: (instanceId) => {
@@ -380,6 +382,63 @@ describe("ProviderSessionReaper", () => {
       expect(Option.isSome(remaining)).toBe(true);
     },
   );
+
+  it("keeps reaping other providers when the live session lookup fails", async () => {
+    const claudeThreadId = ThreadId.make("thread-reaper-lookup-failed-claude");
+    const codexThreadId = ThreadId.make("thread-reaper-lookup-failed-codex");
+    const now = "2026-01-01T00:00:00.000Z";
+    const lastSeenAt = "2026-04-14T00:00:00.000Z";
+    const harness = await createHarness({
+      listSessionsImplementation: () => Effect.die(new Error("binding mismatch")),
+      readModel: makeReadModel(
+        (
+          [
+            [claudeThreadId, "claudeAgent"],
+            [codexThreadId, "codex"],
+          ] as const
+        ).map(([threadId, providerName]) => ({
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName,
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        })),
+      ),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    for (const [threadId, providerName] of [
+      [claudeThreadId, "claudeAgent"],
+      [codexThreadId, "codex"],
+    ] as const) {
+      await runtime!.runPromise(
+        repository.upsert({
+          threadId,
+          providerName,
+          providerInstanceId: null,
+          adapterKey: providerName,
+          runtimeMode: "full-access",
+          status: "running",
+          lastSeenAt,
+          resumeCursor: null,
+          runtimePayload: null,
+        }),
+      );
+    }
+
+    await sweepAt(Date.parse(lastSeenAt) + 1_000);
+
+    expect(harness.stopSession.mock.calls.map(([request]) => request)).toEqual([
+      { threadId: codexThreadId },
+    ]);
+  });
 
   it("skips stale sessions when the thread still has an active turn", async () => {
     const threadId = ThreadId.make("thread-reaper-active-turn");
