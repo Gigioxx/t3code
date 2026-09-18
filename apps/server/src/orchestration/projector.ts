@@ -464,9 +464,12 @@ export function projectEvent(
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
           ...nextBase,
+          // Mirrors the SQL projection, which drops the tombstone's link rows.
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
             updatedAt: payload.deletedAt,
+            pullRequests: [],
+            linkedPullRequest: null,
           }),
         })),
       );

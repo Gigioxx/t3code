@@ -50,7 +50,10 @@ function makeLink(overrides: Partial<ThreadPullRequestLink> = {}): ThreadPullReq
   };
 }
 
-function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): OrchestrationReadModel {
+function makeReadModel(
+  pullRequests: ReadonlyArray<ThreadPullRequestLink>,
+  thread: { readonly deletedAt?: string | null } = {},
+): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [
@@ -92,7 +95,7 @@ function makeReadModel(pullRequests: ReadonlyArray<ThreadPullRequestLink>): Orch
         archivedAt: null,
         settledOverride: null,
         settledAt: null,
-        deletedAt: null,
+        deletedAt: thread.deletedAt ?? null,
         messages: [],
         proposedPlans: [],
         activities: [],
@@ -541,6 +544,81 @@ it.layer(NodeServices.layer)("pull request link decider", (it) => {
           stack: null,
         },
         readModel: makeReadModel([]),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("rejects linking a pull request to a deleted thread", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.pull-request.link",
+          commandId: CommandId.make("cmd-link-deleted"),
+          threadId: THREAD_ID,
+          host: "github.com",
+          repository: "t3tools/t3code",
+          number: 42,
+          url: "https://github.com/t3tools/t3code/pull/42",
+          source: "manual",
+        },
+        readModel: makeReadModel([], { deletedAt: NOW }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("rejects a legacy metadata link on a deleted thread", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-meta-link-deleted"),
+          threadId: THREAD_ID,
+          linkedPullRequest: {
+            projectId: ProjectId.make("project-1"),
+            repository: "t3tools/t3code",
+            number: 42,
+            url: "https://github.com/t3tools/t3code/pull/42",
+          },
+        },
+        readModel: makeReadModel([], { deletedAt: NOW }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("rejects unlinking a pull request from a deleted thread", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.pull-request.unlink",
+          commandId: CommandId.make("cmd-unlink-deleted"),
+          threadId: THREAD_ID,
+          host: "github.com",
+          repository: "t3tools/t3code",
+          number: 42,
+        },
+        readModel: makeReadModel([makeLink()], { deletedAt: NOW }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("rejects syncing a pull request on a deleted thread", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.pull-request-link.sync",
+          commandId: CommandId.make("cmd-sync-deleted"),
+          threadId: THREAD_ID,
+          host: "github.com",
+          repository: "t3tools/t3code",
+          number: 42,
+          snapshot,
+          stack: null,
+        },
+        readModel: makeReadModel([makeLink()], { deletedAt: NOW }),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
     }),

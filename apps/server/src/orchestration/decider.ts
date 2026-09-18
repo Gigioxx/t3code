@@ -43,6 +43,7 @@ import {
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireThreadNotDeleted,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
@@ -1035,7 +1036,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.pull-request.link": {
-      const thread = yield* requireThread({
+      const thread = yield* requireThreadNotDeleted({
         readModel,
         command,
         threadId: command.threadId,
@@ -1081,7 +1082,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.pull-request.unlink": {
-      const thread = yield* requireThread({
+      const thread = yield* requireThreadNotDeleted({
         readModel,
         command,
         threadId: command.threadId,
@@ -1135,7 +1136,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.pull-request-link.sync": {
-      const thread = yield* requireThread({
+      const thread = yield* requireThreadNotDeleted({
         readModel,
         command,
         threadId: command.threadId,

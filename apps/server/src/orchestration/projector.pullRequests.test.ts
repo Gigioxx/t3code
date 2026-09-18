@@ -415,3 +415,39 @@ it.effect("replays Azure legacy selectors as full repository keys", () =>
     expect(model.threads[0]?.linkedPullRequest).toEqual(legacy);
   }),
 );
+
+it.effect("deleting a thread drops its pull request links", () =>
+  Effect.gen(function* () {
+    const created = yield* createThread(
+      yield* createProject(createEmptyReadModel(NOW), {
+        canonicalKey: "github.com/t3tools/t3code",
+        provider: "github",
+        displayName: "t3tools/t3code",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "https://github.com/t3tools/t3code.git",
+        },
+      }),
+    );
+    const linked = yield* projectEvent(
+      created,
+      makeEvent({
+        sequence: 2,
+        type: "thread.pull-request-linked",
+        payload: { threadId: THREAD_ID, link: makeLink(), updatedAt: LATER },
+      }),
+    );
+    const deleted = yield* projectEvent(
+      linked,
+      makeEvent({
+        sequence: 3,
+        type: "thread.deleted",
+        payload: { threadId: THREAD_ID, deletedAt: LATER },
+      }),
+    );
+    expect(deleted.threads[0]?.deletedAt).toBe(LATER);
+    expect(deleted.threads[0]?.pullRequests).toEqual([]);
+    expect(deleted.threads[0]?.linkedPullRequest ?? null).toBeNull();
+  }),
+);
