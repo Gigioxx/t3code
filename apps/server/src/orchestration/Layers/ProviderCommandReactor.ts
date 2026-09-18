@@ -80,6 +80,7 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
+      | "thread.session-start-requested"
       | "thread.settled"
       | "thread.session-set";
   }
@@ -1816,6 +1817,35 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.session-start-requested": {
+        // Restore-only wake: no turn is sent. Once the provider thread is resumed,
+        // Codex dispatches its own durable queue for the loaded thread.
+        const thread = yield* resolveThreadShell(event.payload.threadId);
+        if (!thread) {
+          return;
+        }
+        // Mark a stopped session as starting before the slow restore so a settle
+        // stop decided meanwhile sees it coming alive, and a settled thread
+        // unsettles now rather than only once Codex starts a turn.
+        if (thread.session?.status === "stopped") {
+          yield* setThreadSession({
+            threadId: event.payload.threadId,
+            session: {
+              ...thread.session,
+              status: "starting",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: event.occurredAt,
+            },
+            createdAt: event.occurredAt,
+          });
+        }
+        const resume = ensureSessionForThread(event.payload.threadId, event.occurredAt);
+        yield* thread.worktreePath
+          ? withWorkspaceLease(path.resolve(thread.worktreePath), resume)
+          : resume;
+        return;
+      }
       case "thread.settled": {
         const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);
         if (
@@ -1884,6 +1914,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
+        event.type === "thread.session-start-requested" ||
         event.type === "thread.settled"
       ) {
         return yield* worker.enqueue(event);

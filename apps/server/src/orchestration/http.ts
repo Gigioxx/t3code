@@ -1,10 +1,14 @@
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  CommandId,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
@@ -17,8 +21,12 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
+import { CodexResumeCursorSchema } from "../provider/Layers/CodexSessionRuntime.ts";
+import { ProviderSessionDirectory } from "../provider/Services/ProviderSessionDirectory.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+
+const isCodexResumeCursor = Schema.is(CodexResumeCursorSchema);
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -27,6 +35,8 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+    const sessionDirectory = yield* ProviderSessionDirectory;
+    const crypto = yield* Crypto.Crypto;
 
     return handlers
       .handle(
@@ -122,6 +132,45 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             normalizedCommand,
           );
           return result;
+        }),
+      )
+      .handle(
+        "wakeThread",
+        Effect.fn("environment.orchestration.wakeThread")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          // Only Codex has an external queue today, so only Codex bindings can
+          // match. Linear scan over bindings, same as the session reaper.
+          const bindings = yield* sessionDirectory
+            .listBindings()
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
+          const binding = bindings.find(
+            (candidate) =>
+              candidate.provider === "codex" &&
+              isCodexResumeCursor(candidate.resumeCursor) &&
+              candidate.resumeCursor.threadId === args.payload.providerThreadId,
+          );
+          if (binding === undefined) {
+            return yield* failEnvironmentNotFound("thread_not_found");
+          }
+          const uuid = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.session.start",
+              commandId: CommandId.make(`server:session-wake:${uuid}`),
+              threadId: binding.threadId,
+              createdAt: DateTime.formatIso(yield* DateTime.now),
+            })
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
+          return { threadId: binding.threadId };
         }),
       );
   }),
