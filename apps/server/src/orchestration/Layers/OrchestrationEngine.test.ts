@@ -2,6 +2,7 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import {
   ApprovalRequestId,
@@ -1871,35 +1872,33 @@ describe("OrchestrationEngine", () => {
           createdAt,
         }),
       );
-      await serverA.run(
-        serverA.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make("cmd-shared-turn-start"),
-          threadId,
-          message: {
-            messageId: asMessageId("msg-shared"),
-            role: "user",
-            text: "hello",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt,
-        }),
-      );
+      const turnStart = {
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-shared-turn-start"),
+        threadId,
+        message: {
+          messageId: asMessageId("msg-shared"),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      } as const;
+      await serverA.run(serverA.engine.dispatch(turnStart));
+      // A retry of the same command reaches B before A's receipt is visible.
+      const database = new NodeSqlite.DatabaseSync(databasePath);
+      database
+        .prepare("DELETE FROM orchestration_command_receipts WHERE command_id = ?")
+        .run(turnStart.commandId);
+      database.close();
 
       const firstEventOnB = await serverB.run(
         Effect.gen(function* () {
           const events = yield* serverB.engine.subscribeDomainEvents;
-          // B has not seen the thread yet, so this fails and reconciles.
-          yield* Effect.flip(
-            serverB.engine.dispatch({
-              type: "thread.meta.update",
-              commandId: CommandId.make("cmd-shared-stale-update"),
-              threadId,
-              title: "stale",
-            }),
-          );
+          // B has not seen the thread yet, so the retry fails and reconciles.
+          yield* Effect.flip(serverB.engine.dispatch(turnStart));
           yield* serverB.engine.dispatch({
             type: "thread.meta.update",
             commandId: CommandId.make("cmd-shared-update"),
