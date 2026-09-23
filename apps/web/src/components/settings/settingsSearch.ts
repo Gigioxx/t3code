@@ -604,6 +604,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Browser profile",
     to: "/settings/integrations",
     scope: "project",
+    desktopOnly: true,
     searchTerms: ["project default cookies logins work personal agent tabs"],
   },
   {

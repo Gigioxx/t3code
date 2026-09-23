@@ -526,10 +526,13 @@ function ProjectBrowserProfileRow({
   const settingsHydrated = useClientSettingsHydrated();
   const updateClientSettings = useUpdateClientSettings();
   const listedProfiles = profiles.filter((profile) => profile.kind !== "incognito");
-  const override = listedProfiles.find(
-    (profile) => profile.id === projectProfileIds[members[0]?.physicalProjectKey ?? ""],
+  const globalProfile = listedProfiles.find((profile) => profile.id === globalProfileId);
+  const memberOverrides = members.map((member) =>
+    listedProfiles.find((profile) => profile.id === projectProfileIds[member.physicalProjectKey]),
   );
-  const selected = override ?? listedProfiles.find((profile) => profile.id === globalProfileId);
+  const effective = new Set(memberOverrides.map((profile) => profile ?? globalProfile));
+  // Checkouts set separately can disagree; show that instead of one of them.
+  const selected = effective.size === 1 ? [...effective][0] : undefined;
 
   const setProjectProfile = (profileId: string | null) => {
     const next = { ...getClientSettings().browserProjectProfileIds };
@@ -545,7 +548,7 @@ function ProjectBrowserProfileRow({
       {...searchableSetting("project-browser-profile")}
       description="New tabs in this project, including ones agents open, use this profile."
       resetAction={
-        override ? (
+        memberOverrides.some(Boolean) ? (
           <SettingResetButton
             label="project browser profile"
             onClick={() => setProjectProfile(null)}
@@ -561,7 +564,7 @@ function ProjectBrowserProfileRow({
           }}
         >
           <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Browser profile">
-            <SelectValue>{selected?.name}</SelectValue>
+            <SelectValue>{selected?.name ?? "Mixed"}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {listedProfiles.map((profile) => (
