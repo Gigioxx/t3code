@@ -126,8 +126,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
       commandReadModel = yield* projectEventsOntoReadModel(commandReadModel, persistedEvents);
 
+      // Another server sharing this database may have written the other
+      // events. Republishing them would make local reactors redo that work,
+      // such as sending a turn a second time.
       for (const persistedEvent of persistedEvents) {
-        yield* PubSub.publish(eventPubSub, persistedEvent);
+        if (persistedEvent.commandId === envelope.command.commandId) {
+          yield* PubSub.publish(eventPubSub, persistedEvent);
+        }
       }
     });
 

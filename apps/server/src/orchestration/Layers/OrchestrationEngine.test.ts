@@ -1838,6 +1838,86 @@ describe("OrchestrationEngine", () => {
     await runtime.dispose();
   });
 
+  it("does not republish events written by another server when reconciling", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-shared-db-"));
+    const databasePath = NodePath.join(directory, "state.sqlite");
+    const serverA = await createOrchestrationSystem(databasePath);
+    const serverB = await createOrchestrationSystem(databasePath);
+    const threadId = ThreadId.make("thread-shared");
+    const createdAt = now();
+    try {
+      await serverA.run(
+        serverA.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-shared-project-create"),
+          projectId: asProjectId("project-shared"),
+          title: "Shared Project",
+          workspaceRoot: "/tmp/project-shared",
+          createdAt,
+        }),
+      );
+      await serverA.run(
+        serverA.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-shared-thread-create"),
+          threadId,
+          projectId: asProjectId("project-shared"),
+          title: "shared",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await serverA.run(
+        serverA.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-shared-turn-start"),
+          threadId,
+          message: {
+            messageId: asMessageId("msg-shared"),
+            role: "user",
+            text: "hello",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt,
+        }),
+      );
+
+      const firstEventOnB = await serverB.run(
+        Effect.gen(function* () {
+          const events = yield* serverB.engine.subscribeDomainEvents;
+          // B has not seen the thread yet, so this fails and reconciles.
+          yield* Effect.flip(
+            serverB.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.make("cmd-shared-stale-update"),
+              threadId,
+              title: "stale",
+            }),
+          );
+          yield* serverB.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make("cmd-shared-update"),
+            threadId,
+            title: "renamed on B",
+          });
+          return yield* Stream.runHead(events);
+        }).pipe(Effect.scoped),
+      );
+
+      expect(Option.getOrThrow(firstEventOnB).commandId).toBe("cmd-shared-update");
+    } finally {
+      await serverA.dispose();
+      await serverB.dispose();
+      await NodeFSP.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("fails command dispatch when command invariants are violated", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
