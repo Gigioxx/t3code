@@ -677,7 +677,8 @@ describe("pooled account columns", () => {
       now,
     );
     // 20 parts empty, 5 parts with 18% left: 0.9 of 25 parts.
-    expect(pool!.windows[0]).toMatchObject({ remainingPercent: 4, usedPercent: 96 });
+    // Both windows are 99% elapsed: 96% used is on pace, where an even 91% would read under.
+    expect(pool!.windows[0]).toMatchObject({ remainingPercent: 4, usedPercent: 96, pace: "on" });
     expect(pool!.windows[0]!.resets.map((reset) => reset.restoresPercent)).toEqual([80, 16]);
     const [zero] = collectLimitPools(
       [{ ...account("a", [{ ...weekly, usedPercent: 60 }]), plan: "Pro 0x" }],
