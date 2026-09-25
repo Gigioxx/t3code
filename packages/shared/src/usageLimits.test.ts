@@ -685,6 +685,18 @@ describe("pooled account columns", () => {
       now,
     );
     expect(zero!.windows[0]!.remainingPercent).toBe(40);
+    // Plus has no multiplier in its label and is the 1x baseline.
+    const [plus] = collectLimitPools(
+      [
+        {
+          ...account("a", [{ ...weekly, usedPercent: 100 }]),
+          plan: "ChatGPT Pro 20x Subscription",
+        },
+        { ...account("b", [{ ...weekly, usedPercent: 0 }]), plan: "ChatGPT Plus Subscription" },
+      ],
+      now,
+    );
+    expect(plus!.windows[0]!.remainingPercent).toBe(5);
   });
 
   it("falls back to weekly resets when no account reports a session", () => {
