@@ -679,6 +679,11 @@ describe("pooled account columns", () => {
     // 20 parts empty, 5 parts with 18% left: 0.9 of 25 parts.
     expect(pool!.windows[0]).toMatchObject({ remainingPercent: 4, usedPercent: 96 });
     expect(pool!.windows[0]!.resets.map((reset) => reset.restoresPercent)).toEqual([80, 16]);
+    const [zero] = collectLimitPools(
+      [{ ...account("a", [{ ...weekly, usedPercent: 60 }]), plan: "Pro 0x" }],
+      now,
+    );
+    expect(zero!.windows[0]!.remainingPercent).toBe(40);
   });
 
   it("falls back to weekly resets when no account reports a session", () => {

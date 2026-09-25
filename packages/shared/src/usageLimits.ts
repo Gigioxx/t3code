@@ -376,7 +376,7 @@ function accountSortName(account: LimitAccount): string {
 
 /** Relative plan size read from labels like `Pro 5x` or `Max 20x`; unknown plans count as 1. */
 export function planWeight(account: LimitAccount): number {
-  return Number(account.plan?.match(/\b(\d+)x\b/i)?.[1] ?? 1);
+  return Number(account.plan?.match(/\b(\d+)x\b/i)?.[1]) || 1;
 }
 
 function poolWindows(accounts: readonly LimitAccount[], now: number): readonly LimitPoolWindow[] {
