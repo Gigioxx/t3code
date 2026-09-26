@@ -11,6 +11,13 @@ import { PNG } from "pngjs";
 const CLAUDE_MAX_IMAGE_EDGE = 2000;
 
 /**
+ * A highly compressible PNG fits the attachment byte cap at any size, and
+ * decoding expands it to 4 bytes per pixel. Past this bound the image is sent
+ * as is, as before. 50MP still covers an 8000x6000 photo.
+ */
+const MAX_DECODED_PIXELS = 50_000_000;
+
+/**
  * Scales a PNG or JPEG down to fit CLAUDE_MAX_IMAGE_EDGE. Images already
  * within the limit come back untouched, so only oversized ones pay for a
  * decode.
@@ -21,7 +28,11 @@ const CLAUDE_MAX_IMAGE_EDGE = 2000;
  */
 export function fitClaudeImage(mimeType: string, bytes: Uint8Array): Uint8Array {
   const dimensions = readImageDimensions(bytes);
-  if (!dimensions || Math.max(dimensions.width, dimensions.height) <= CLAUDE_MAX_IMAGE_EDGE) {
+  if (
+    !dimensions ||
+    Math.max(dimensions.width, dimensions.height) <= CLAUDE_MAX_IMAGE_EDGE ||
+    dimensions.width * dimensions.height > MAX_DECODED_PIXELS
+  ) {
     return bytes;
   }
   if (mimeType === "image/png") {
@@ -64,18 +75,21 @@ function downscale(image: { width: number; height: number; data: Uint8Array }) {
       for (let sourceY = top; sourceY < bottom; sourceY++) {
         for (let sourceX = left; sourceX < right; sourceX++) {
           const offset = (sourceY * image.width + sourceX) * 4;
-          red += image.data[offset] ?? 0;
-          green += image.data[offset + 1] ?? 0;
-          blue += image.data[offset + 2] ?? 0;
-          alpha += image.data[offset + 3] ?? 0;
+          // Weighting color by alpha keeps transparent pixels from darkening edges.
+          const pixelAlpha = image.data[offset + 3] ?? 0;
+          red += (image.data[offset] ?? 0) * pixelAlpha;
+          green += (image.data[offset + 1] ?? 0) * pixelAlpha;
+          blue += (image.data[offset + 2] ?? 0) * pixelAlpha;
+          alpha += pixelAlpha;
         }
       }
-      const count = (bottom - top) * (right - left);
       const target = (y * width + x) * 4;
-      data[target] = Math.round(red / count);
-      data[target + 1] = Math.round(green / count);
-      data[target + 2] = Math.round(blue / count);
-      data[target + 3] = Math.round(alpha / count);
+      if (alpha > 0) {
+        data[target] = Math.round(red / alpha);
+        data[target + 1] = Math.round(green / alpha);
+        data[target + 2] = Math.round(blue / alpha);
+      }
+      data[target + 3] = Math.round(alpha / ((bottom - top) * (right - left)));
     }
   }
   return { width, height, data };
