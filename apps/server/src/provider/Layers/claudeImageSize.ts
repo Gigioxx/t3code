@@ -12,30 +12,29 @@ const CLAUDE_MAX_IMAGE_EDGE = 2000;
 
 /**
  * A highly compressible PNG fits the attachment byte cap at any size, and
- * decoding expands it to 4 bytes per pixel. Past this bound the image is sent
- * as is, as before. 50MP still covers an 8000x6000 photo.
+ * decoding expands it to 4 bytes per pixel, so past this bound a PNG or JPEG
+ * is not decoded. 50MP still covers an 8000x6000 photo.
  */
 const MAX_DECODED_PIXELS = 50_000_000;
 
 /**
  * Scales a PNG or JPEG down to fit CLAUDE_MAX_IMAGE_EDGE. Images already
  * within the limit come back untouched, so only oversized ones pay for a
- * decode.
+ * decode. Returns null for a PNG or JPEG too large to decode safely, since
+ * sending it unscaled would break the thread.
  *
  * ponytail: decodes on the event loop, about 150ms for a phone screenshot,
  * 400ms for a Retina screenshot, and 0.7s for a 12MP photo. Only steered
  * images pay it. Move it to a worker if that stall shows up.
  */
-export function fitClaudeImage(mimeType: string, bytes: Uint8Array): Uint8Array {
+export function fitClaudeImage(mimeType: string, bytes: Uint8Array): Uint8Array | null {
   const dimensions = readImageDimensions(bytes);
-  if (
-    !dimensions ||
-    Math.max(dimensions.width, dimensions.height) <= CLAUDE_MAX_IMAGE_EDGE ||
-    dimensions.width * dimensions.height > MAX_DECODED_PIXELS
-  ) {
+  if (!dimensions || Math.max(dimensions.width, dimensions.height) <= CLAUDE_MAX_IMAGE_EDGE) {
     return bytes;
   }
+  const decodable = dimensions.width * dimensions.height <= MAX_DECODED_PIXELS;
   if (mimeType === "image/png") {
+    if (!decodable) return null;
     const image = PNG.sync.read(Buffer.from(bytes));
     const { width, height, data } = downscale(image);
     const scaled = new PNG({ width, height });
@@ -46,6 +45,7 @@ export function fitClaudeImage(mimeType: string, bytes: Uint8Array): Uint8Array 
     return PNG.sync.write(scaled, { colorType });
   }
   if (mimeType === "image/jpeg") {
+    if (!decodable) return null;
     const image = jpeg.decode(bytes, { useTArray: true });
     // The spread keeps the decoder's `exifBuffer`, so the EXIF orientation of
     // a phone photo survives the re-encode.

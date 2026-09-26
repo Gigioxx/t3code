@@ -1670,6 +1670,13 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
           ),
         )
       : bytes;
+    if (fittedBytes === null) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "turn/start",
+        detail: `Image '${attachment.name}' is too large to send while Claude is working. Resize it or send it after the turn finishes.`,
+      });
+    }
 
     sdkContent.push(
       buildClaudeImageContentBlock({
