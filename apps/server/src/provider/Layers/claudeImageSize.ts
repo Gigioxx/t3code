@@ -45,8 +45,8 @@ export function fitClaudeImage(mimeType: string, bytes: Uint8Array): Uint8Array 
     return PNG.sync.write(scaled, { colorType });
   }
   if (mimeType === "image/jpeg") {
-    if (!decodable) return null;
-    const image = jpeg.decode(bytes, { useTArray: true });
+    const image = decodable ? decodeJpeg(bytes) : null;
+    if (!image) return null;
     // The spread keeps the decoder's `exifBuffer`, so the EXIF orientation of
     // a phone photo survives the re-encode.
     return jpeg.encode({ ...image, ...downscale(image) }, 90).data;
@@ -54,6 +54,18 @@ export function fitClaudeImage(mimeType: string, bytes: Uint8Array): Uint8Array 
   // ponytail: GIF and WebP pass through; no pure-JS codec for them here. Add
   // one if oversized GIF or WebP attachments show up in practice.
   return bytes;
+}
+
+/** Decodes a JPEG, or returns null when it would exceed jpeg-js's 512MB budget. */
+function decodeJpeg(bytes: Uint8Array) {
+  try {
+    return jpeg.decode(bytes, { useTArray: true });
+  } catch (error) {
+    // 4:4:4 JPEGs need about 12 bytes per pixel, so some pass MAX_DECODED_PIXELS
+    // and still hit the decoder's memory cap.
+    if (error instanceof Error && error.message.startsWith("maxMemoryUsageInMB")) return null;
+    throw error;
+  }
 }
 
 /** Box-filter downscale of RGBA pixels to fit CLAUDE_MAX_IMAGE_EDGE. */

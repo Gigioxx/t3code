@@ -48,6 +48,15 @@ describe("fitClaudeImage", () => {
     expect(fitClaudeImage("image/png", header)).toBeNull();
   });
 
+  it("refuses a JPEG that exceeds the decoder's memory budget", () => {
+    // SOI, then a 4:4:4 SOF0 frame header for 8000x6000 (48MP), then EOI.
+    const header = Uint8Array.from([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x17, 0x70, 0x1f, 0x40, 0x03, 0x01, 0x11, 0x00,
+      0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+    ]);
+    expect(fitClaudeImage("image/jpeg", header)).toBeNull();
+  });
+
   it("keeps a grayscale PNG grayscale", () => {
     const decoded = PNG.sync.read(fitted("image/png", png(2400, 100, 90, 0)));
     expect({ width: decoded.width, colorType: decoded.colorType }).toEqual({
