@@ -145,6 +145,12 @@ const ManualSchemas: Record<string, Schema.Json> = {
   },
 };
 
+// Codex ships new ChatGPT plans between protocol refreshes and reads unknown
+// ones as `unknown`. Accept any plan so a new one cannot fail account reads.
+const DefinitionSchemaOverrides: Record<string, Schema.Json> = {
+  PlanType: { type: "string" },
+};
+
 const getGeneratedPaths = Effect.fn("getGeneratedPaths")(function* () {
   const path = yield* Path.Path;
   const generatedDir = path.join(import.meta.dirname, "..", "src", "_generated");
@@ -643,7 +649,7 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
       aggregateSchemas[localDefinitionNames.get(definitionName)!] = stripNullDefaults(
         normalizeNullableTypes(
           rewriteExternalRefs(
-            definitionSchema,
+            DefinitionSchemaOverrides[definitionName] ?? definitionSchema,
             localDefinitionNames,
             file.namespace,
             exportNameByQualifiedName,

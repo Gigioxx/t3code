@@ -4,6 +4,10 @@ import * as Schema from "effect/Schema";
 import * as CodexSchema from "./schema.ts";
 
 const isGetAccountResponse = Schema.is(CodexSchema.V2GetAccountResponse);
+const isAccountUpdatedNotification = Schema.is(CodexSchema.V2AccountUpdatedNotification);
+const isAccountRateLimitsUpdatedNotification = Schema.is(
+  CodexSchema.V2AccountRateLimitsUpdatedNotification,
+);
 const isThreadReadResponse = Schema.is(CodexSchema.V2ThreadReadResponse);
 const isThreadResumeResponse = Schema.is(CodexSchema.V2ThreadResumeResponse);
 const isThreadForkResponse = Schema.is(CodexSchema.V2ThreadForkResponse);
@@ -201,16 +205,8 @@ it("accepts Codex misalignment policy errors for thread responses", () => {
   );
 });
 
-it("accepts Codex 0.150 account plan values", () => {
-  const planTypes = [
-    "self_serve_business_prolite",
-    "ent26",
-    "enterprise_cbp_automation",
-    "edu_plus",
-    "edu_pro",
-  ];
-
-  for (const planType of planTypes) {
+it("accepts account plans newer than the generated protocol", () => {
+  for (const planType of ["promax", "a_plan_codex_adds_later"]) {
     const accountResponse = {
       account: {
         email: "user@example.com",
@@ -221,5 +217,7 @@ it("accepts Codex 0.150 account plan values", () => {
     };
 
     assert.equal(isGetAccountResponse(accountResponse), true);
+    assert.equal(isAccountUpdatedNotification({ authMode: "chatgpt", planType }), true);
+    assert.equal(isAccountRateLimitsUpdatedNotification({ rateLimits: { planType } }), true);
   }
 });
