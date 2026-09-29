@@ -20,7 +20,8 @@ gets its model list from its app server.
 releases that predate catalog discovery; it does not add models to their catalogs.
 Catalog-aware releases use `providers.claudeAgent.models[].status` instead.
 Codex uses `currentModels.codex` as a legacy-classification overlay for discovered
-models.
+models. A `providers.codex.models` entry overrides that status and can add a
+`new` badge, but never adds a model the app server does not list.
 
 Model data is schema-validated configuration. Tests should cover resolver, cache,
 and adapter semantics with synthetic model names, so adding a model never requires
