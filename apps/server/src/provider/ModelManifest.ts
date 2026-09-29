@@ -209,18 +209,27 @@ export const encodeManifestCache = Schema.encodeEffect(
   ),
 );
 
+function findCatalogModel(
+  manifest: ModelManifestData,
+  driverKind: ProviderDriverKind,
+  slug: string,
+) {
+  const family = driverKind === "codex" ? codexModelFamily(slug) : slug;
+  const catalog = manifest.providers?.[driverKind]?.models;
+  return (
+    catalog?.find((model) => model.slug === slug) ?? catalog?.find((model) => model.slug === family)
+  );
+}
+
 /** True when the manifest classifies `slug` as legacy for `driverKind`. */
 function isLegacyModel(
   manifest: ModelManifestData,
   driverKind: ProviderDriverKind,
   slug: string,
 ): boolean {
-  const family = driverKind === "codex" ? codexModelFamily(slug) : slug;
-  const catalog = manifest.providers?.[driverKind]?.models;
-  const catalogModel =
-    catalog?.find((model) => model.slug === slug) ??
-    catalog?.find((model) => model.slug === family);
+  const catalogModel = findCatalogModel(manifest, driverKind, slug);
   if (catalogModel) return catalogModel.status === "legacy";
+  const family = driverKind === "codex" ? codexModelFamily(slug) : slug;
   const currentModels = manifest.currentModels[driverKind];
   if (!currentModels) return false;
   return !currentModels.includes(slug) && !currentModels.includes(family);
@@ -298,8 +307,11 @@ export function classifyModels(
   manifest: ModelManifestData,
   driverKind: ProviderDriverKind,
 ): ReadonlyArray<ServerProviderModel> {
-  return models.map((model) => {
-    if (model.isCustom) return model;
+  return models.map((entry) => {
+    if (entry.isCustom) return entry;
+    // Discovered models carry no badge, so the manifest can mark a launch.
+    const badge = findCatalogModel(manifest, driverKind, entry.slug)?.badge;
+    const model = badge && entry.badge !== badge ? { ...entry, badge } : entry;
     if (isLegacyModel(manifest, driverKind, model.slug)) {
       return model.isLegacy ? model : { ...model, isLegacy: true };
     }
