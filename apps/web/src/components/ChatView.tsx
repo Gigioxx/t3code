@@ -8418,8 +8418,11 @@ export default function ChatView(props: ChatViewProps) {
       // The composer is already cleared, so until the draft is marked promoting
       // new-thread flows would treat it as an empty draft and reuse it while
       // the worktree is still being prepared.
-      if (isLocalDraftThread) {
-        markPromotedDraftThreadByRef(scopeThreadRef(activeThread.environmentId, threadIdForSend));
+      const sentDraftThreadRef = isLocalDraftThread
+        ? scopeThreadRef(activeThread.environmentId, threadIdForSend)
+        : null;
+      if (sentDraftThreadRef) {
+        markPromotedDraftThreadByRef(sentDraftThreadRef);
       }
       if (backgroundThreadRef) {
         try {
@@ -8457,12 +8460,15 @@ export default function ChatView(props: ChatViewProps) {
           releaseDraftAttachments(composerAttachmentsSnapshot);
         }
         acknowledgeActiveThreadWoke();
-        if (backgroundThreadRef) {
+        // A draft still on screen finalizes once its thread route takes over.
+        if (sentDraftThreadRef) {
           if (backgroundDraftOpened || currentRouteThreadKeyRef.current !== routeThreadKey) {
-            finalizePromotedDraftThreadByRef(backgroundThreadRef);
+            finalizePromotedDraftThreadByRef(sentDraftThreadRef);
           } else {
-            clearBackgroundDraftSubmissionByRef(backgroundThreadRef);
+            clearBackgroundDraftSubmissionByRef(sentDraftThreadRef);
           }
+        }
+        if (backgroundThreadRef) {
           if (backgroundDraftOpened) {
             toastManager.add(
               stackedThreadToast({
