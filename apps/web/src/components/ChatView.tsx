@@ -325,7 +325,6 @@ import {
   terminalContextReference,
 } from "../lib/composerContextRecords";
 import {
-  latestCompletedToolActivityId,
   type QueuedComposerMessage,
   type QueuedMessageSendSettings,
   useQueuedMessages,
@@ -7280,7 +7279,6 @@ export default function ChatView(props: ChatViewProps) {
         previewAnnotations: [],
         reviewComments: [],
         sendSettings: sendCtx ? readComposerSendSettings(sendCtx) : firstMessage.sendSettings,
-        queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
         // Restoration is not a send. The user decides when the overflow goes.
         holdUntilUserAction: true,
         createdAt: new Date().toISOString(),
@@ -7686,7 +7684,6 @@ export default function ChatView(props: ChatViewProps) {
         previewAnnotations: [...composerPreviewAnnotations],
         reviewComments: [...composerReviewComments],
         sendSettings,
-        queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
         createdAt: new Date().toISOString(),
       });
       promptRef.current = "";

@@ -40,12 +40,6 @@ export interface QueuedComposerMessage {
   reviewComments: ReviewCommentContext[];
   sendSettings: QueuedMessageSendSettings;
   /**
-   * The newest completed tool activity at queue time. A different id later
-   * means a tool call finished after the user queued, which is the boundary
-   * the message goes out on.
-   */
-  queuedAfterToolActivityId: string | null;
-  /**
    * Set when the message was created by Stop or a failed restore, not by the
    * user pressing send. It waits for Send now instead of leaving on its own.
    */
@@ -78,14 +72,9 @@ interface QueuedMessageStoreState {
   enqueue: (threadKey: string, message: Omit<QueuedComposerMessage, "id">) => QueuedComposerMessage;
   /**
    * Marks one message as sending and returns it, or null when it is gone or
-   * the thread already has a send under way. The other messages are
-   * re-anchored to `toolActivityId` so only one leaves per tool boundary.
+   * the thread already has a send under way.
    */
-  beginSend: (
-    threadKey: string,
-    id: string,
-    toolActivityId: string | null,
-  ) => QueuedComposerMessage | null;
+  beginSend: (threadKey: string, id: string) => QueuedComposerMessage | null;
   /** The turn start is going out. False when Stop took the message back first. */
   markDispatching: (threadKey: string, id: string, thread: LocalDispatchSnapshot) => boolean;
   /** Drops a message whose send went out, or that had nothing left to send. */
@@ -137,18 +126,14 @@ export const useQueuedMessageStore = create<QueuedMessageStoreState>()((set, get
       update(threadKey, [...queueOf(threadKey), entry]);
       return entry;
     },
-    beginSend: (threadKey, id, toolActivityId) => {
+    beginSend: (threadKey, id) => {
       const queue = queueOf(threadKey);
       const entry = queue.find((message) => message.id === id);
       if (!entry || queue.some((message) => message.sending)) return null;
       update(
         threadKey,
         queue.map((message) =>
-          message.id === id
-            ? { ...message, sending: "preparing" }
-            : message.queuedAfterToolActivityId === toolActivityId
-              ? message
-              : { ...message, queuedAfterToolActivityId: toolActivityId },
+          message.id === id ? { ...message, sending: "preparing" } : message,
         ),
       );
       return entry;
@@ -218,47 +203,17 @@ export const useQueuedMessageStore = create<QueuedMessageStoreState>()((set, get
 });
 
 /**
- * The newest finished tool call. Its id changing is the boundary a queued
- * message goes out on. Live arrays are sorted, but a snapshot loaded from the
- * database is not, so pick by sequence rather than position.
- */
-export function latestCompletedToolActivityId(
-  activities: ReadonlyArray<{
-    readonly id: string;
-    readonly kind: string;
-    readonly sequence?: number | undefined;
-    readonly createdAt: string;
-  }>,
-): string | null {
-  let latest: (typeof activities)[number] | null = null;
-  for (const activity of activities) {
-    if (activity.kind !== "tool.completed") continue;
-    if (
-      latest === null ||
-      (activity.sequence ?? -1) > (latest.sequence ?? -1) ||
-      ((activity.sequence ?? -1) === (latest.sequence ?? -1) &&
-        activity.createdAt > latest.createdAt)
-    ) {
-      latest = activity;
-    }
-  }
-  return latest?.id ?? null;
-}
-
-/**
- * A queued message is due mid-turn once a tool call finished after it was
- * queued, and as soon as the turn is over otherwise. "connecting" is the gap
- * between a send and the provider picking it up, so nothing is due there.
+ * Queued messages wait for the turn to end, then the oldest starts a new turn.
+ * "connecting" is the gap between a send and the provider picking it up, so
+ * nothing is due there either.
  */
 export function isQueuedMessageDue(input: {
-  message: Pick<QueuedComposerMessage, "queuedAfterToolActivityId" | "holdUntilUserAction">;
+  message: Pick<QueuedComposerMessage, "holdUntilUserAction">;
   phase: "connecting" | "running" | "ready" | "disconnected";
-  latestToolActivityId: string | null;
 }): boolean {
-  if (input.message.holdUntilUserAction) return false;
-  if (input.phase === "connecting") return false;
-  if (input.phase !== "running") return true;
-  return input.latestToolActivityId !== input.message.queuedAfterToolActivityId;
+  return (
+    !input.message.holdUntilUserAction && input.phase !== "connecting" && input.phase !== "running"
+  );
 }
 
 export function useQueuedMessages(threadKey: string): QueuedComposerMessage[] {

@@ -73,7 +73,6 @@ function enqueue(overrides: Partial<QueuedComposerMessage> = {}) {
       interactionMode: "default",
       promptEffort: null,
     },
-    queuedAfterToolActivityId: null,
     createdAt: "2026-09-25T00:00:00Z",
     ...overrides,
   });
@@ -104,7 +103,11 @@ afterEach(() => {
 describe("QueuedMessageSender", () => {
   const thread = (
     status: string,
-    { toolActivityIds = [] as string[], userMessageIds = [] as string[] } = {},
+    {
+      toolActivityIds = [] as string[],
+      userMessageIds = [] as string[],
+      latestTurnId = null as string | null,
+    } = {},
   ) => ({
     session: { status, activeTurnId: null, updatedAt: status },
     activities: toolActivityIds.map((id, index) => ({
@@ -114,7 +117,7 @@ describe("QueuedMessageSender", () => {
       createdAt: "2026-09-25T00:00:01Z",
     })),
     messages: userMessageIds.map((id) => ({ id, role: "user" })),
-    latestTurn: null,
+    latestTurn: latestTurnId === null ? null : { turnId: latestTurnId },
   });
   let root: ReactTestRenderer | null = null;
   const render = () =>
@@ -144,7 +147,7 @@ describe("QueuedMessageSender", () => {
     expect(queue()).toBeUndefined();
   });
 
-  it("holds the next message until the server picks up the one before it", async () => {
+  it("holds the next message until the turn the one before it started has ended", async () => {
     enqueue({ prompt: "first" });
     enqueue({ prompt: "second" });
     io.thread = thread("ready");
@@ -152,11 +155,15 @@ describe("QueuedMessageSender", () => {
     await render();
     expect(commandsRun()).toEqual(["start"]);
 
-    // The first message started a turn; the second waits for its next tool call.
-    io.thread = thread("running", { userMessageIds: ["first"] });
+    // The first message started a turn. A finished tool call does not release
+    // the second; the end of that turn does.
+    const started = { userMessageIds: ["first"], latestTurnId: "turn-1" };
+    io.thread = thread("running", started);
+    await render();
+    io.thread = thread("running", { ...started, toolActivityIds: ["tool-1"] });
     await render();
     expect(commandsRun()).toEqual(["start"]);
-    io.thread = thread("running", { userMessageIds: ["first"], toolActivityIds: ["tool-1"] });
+    io.thread = thread("ready", { ...started, toolActivityIds: ["tool-1"] });
     await render();
     expect(commandsRun()).toEqual(["start", "start"]);
   });
