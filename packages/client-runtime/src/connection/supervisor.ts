@@ -523,7 +523,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         target._tag !== "RelayConnectionTarget"
           ? `${target.label} did not respond during connection setup.`
           : Option.isSome(yield* SubscriptionRef.get(prepared))
-            ? `${target.label} did not open a WebSocket during connection setup. ${WEBSOCKET_BLOCKING_HINT}`
+            ? `${target.label} did not finish connection setup after T3 Connect accepted the request. ${WEBSOCKET_BLOCKING_HINT}`
             : `${target.label} did not respond during connection setup. ${NETWORK_BLOCKING_HINT}`;
       return {
         _tag: "Failure",

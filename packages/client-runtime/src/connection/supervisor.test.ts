@@ -490,7 +490,7 @@ describe("EnvironmentSupervisor", () => {
       yield* TestClock.adjust("15 seconds");
       const failed = yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
       expect(failed.lastFailure?.message).toBe(
-        `Test environment did not open a WebSocket during connection setup. ${WEBSOCKET_BLOCKING_HINT}`,
+        `Test environment did not finish connection setup after T3 Connect accepted the request. ${WEBSOCKET_BLOCKING_HINT}`,
       );
     }).pipe(Effect.provide(TestClock.layer())),
   );
