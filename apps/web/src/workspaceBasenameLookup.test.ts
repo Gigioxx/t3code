@@ -4,6 +4,7 @@ import {
   claimWorkspaceBasenameLookup,
   needsWorkspaceBasenameLookup,
   pickWorkspaceBasenameMatch,
+  stripRepeatedWorkspacePrefix,
 } from "./workspaceBasenameLookup";
 
 describe("needsWorkspaceBasenameLookup", () => {
@@ -90,5 +91,22 @@ describe("claimWorkspaceBasenameLookup", () => {
   it("stays valid while it is the only claim", () => {
     const only = claimWorkspaceBasenameLookup();
     expect(only()).toBe(true);
+  });
+});
+
+describe("stripRepeatedWorkspacePrefix", () => {
+  it("drops the project folder repeated by a repo-root-relative path", () => {
+    expect(stripRepeatedWorkspacePrefix("physics/notes/outline.md", "/school/physics")).toBe(
+      "notes/outline.md",
+    );
+    expect(stripRepeatedWorkspacePrefix("courses/physics/a.md", "/school/courses/physics")).toBe(
+      "a.md",
+    );
+    expect(stripRepeatedWorkspacePrefix("physics\\a.md", "C:\\school\\physics")).toBe("a.md");
+  });
+
+  it("returns null when the path does not start with the project folder", () => {
+    expect(stripRepeatedWorkspacePrefix("notes/outline.md", "/school/physics")).toBeNull();
+    expect(stripRepeatedWorkspacePrefix("physics", "/school/physics")).toBeNull();
   });
 });

@@ -52,3 +52,20 @@ export function pickWorkspaceBasenameMatch(
   );
   return foldedMatches.length === 1 ? (foldedMatches[0]?.path ?? null) : null;
 }
+
+/**
+ * Agents echo git paths relative to the repository root, so in a project that
+ * is a subfolder of its repository `physics/notes/a.md` repeats the project's
+ * own folder. Returns the path with that repeated prefix removed, if any.
+ */
+export function stripRepeatedWorkspacePrefix(relativePath: string, cwd: string): string | null {
+  const pathSegments = relativePath.split(/[\\/]+/);
+  const cwdSegments = cwd.split(/[\\/]+/).filter(Boolean);
+  for (let count = Math.min(cwdSegments.length, pathSegments.length - 1); count > 0; count--) {
+    const prefix = cwdSegments.slice(-count);
+    if (prefix.every((segment, index) => segment === pathSegments[index])) {
+      return pathSegments.slice(count).join("/");
+    }
+  }
+  return null;
+}
