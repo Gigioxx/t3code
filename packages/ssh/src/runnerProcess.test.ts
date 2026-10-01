@@ -136,7 +136,7 @@ server.listen(Number(process.env.T3_TEST_PORT ?? 0), "127.0.0.1", () => {
 describe.skipIf(HostProcessPlatform.defaultValue() === "win32")(
   "remote reconnect process ownership",
   () => {
-    it.live.each(["managed", "external"] as const)(
+    it.live.each(["managed", "external", "missing-pid"] as const)(
       "reuses the same %s server published in the runtime file",
       (serverKind) =>
         Effect.gen(function* () {
@@ -184,7 +184,10 @@ server.listen(0, "127.0.0.1", () => {
             `${buildRemoteT3RunnerScript(runner)}\n`,
           );
           yield* fs.writeFileString(path.join(fixture, "port"), `${started.port}\n`);
-          yield* fs.writeFileString(path.join(fixture, "managed"), `${serverKind}\n`);
+          yield* fs.writeFileString(
+            path.join(fixture, "managed"),
+            `${serverKind === "external" ? "external" : "managed"}\n`,
+          );
           if (serverKind === "managed") {
             yield* fs.writeFileString(path.join(fixture, "pid"), `${started.pid}\n`);
           }
@@ -211,13 +214,19 @@ server.listen(0, "127.0.0.1", () => {
           assert.equal(result.exitCode, 0, result.stderr);
           assert.isFalse(yield* fs.exists(path.join(fixture, "stopped")));
           assert.isTrue(yield* child.isRunning);
+          const expectedKind = serverKind === "missing-pid" ? "external" : serverKind;
           assert.equal(
             result.stdout,
-            `{"remotePort":${started.port},"serverKind":"${serverKind}"}\n`,
+            `{"remotePort":${started.port},"serverKind":"${expectedKind}"}\n`,
           );
-          assert.equal(yield* fs.readFileString(path.join(fixture, "managed")), `${serverKind}\n`);
+          assert.equal(
+            yield* fs.readFileString(path.join(fixture, "managed")),
+            `${expectedKind}\n`,
+          );
           if (serverKind === "managed") {
             assert.equal(yield* fs.readFileString(path.join(fixture, "pid")), `${started.pid}\n`);
+          } else {
+            assert.isFalse(yield* fs.exists(path.join(fixture, "pid")));
           }
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
