@@ -395,6 +395,7 @@ it.effect(
           getCounts: () => Effect.die("unused"),
           getEventReplayStats: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.succeedNone,
+          hasActiveProjectAtWorkspaceRoot: () => Effect.succeed(false),
           getProjectShells: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("thread lookup failed"),
