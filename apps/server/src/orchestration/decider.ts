@@ -926,6 +926,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // A running provider keeps its cwd, so moving the thread would split the
+      // turn across checkouts. Resending the current path stays allowed.
+      if (
+        command.worktreePath !== undefined &&
+        command.worktreePath !== thread.worktreePath &&
+        thread.session?.status === "running"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `thread ${command.threadId} cannot change worktree while a turn is running`,
+        });
+      }
       // Old clients only see the derived single link. Unlink that request through
       // the same command path as modern clients, including stack dismissal, while
       // retaining other links they cannot see. Historical metadata events still replay unchanged.
