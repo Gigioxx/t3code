@@ -212,4 +212,8 @@ describe("isMarkdownFileLinkLabel", () => {
     );
     expect(isMarkdownFileLinkLabel("my file.ts", "/repo/my%20file.ts#L12")).toBe(true);
   });
+  it("matches Windows paths regardless of case", () => {
+    expect(isMarkdownFileLinkLabel("SRC\\EXAMPLE.TS", "C:\\repo\\src\\example.ts")).toBe(true);
+    expect(isMarkdownFileLinkLabel("SRC/EXAMPLE.TS", "/repo/src/example.ts")).toBe(false);
+  });
 });

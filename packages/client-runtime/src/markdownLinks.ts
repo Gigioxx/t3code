@@ -349,10 +349,15 @@ export function isMarkdownFileLinkLabel(label: string, href: string): boolean {
   if (!label.trim()) return true;
   const target = parseMarkdownFileLink(href);
   if (!target) return false;
-  const path = (parseMarkdownFileLink(label)?.path ?? splitFilePathPosition(label.trim()).path)
-    .replaceAll("\\", "/")
-    .replace(/^\.\//, "")
-    .replace(/([^/:])\/+$/, "$1");
-  const targetPath = target.path.replaceAll("\\", "/").replace(/([^/:])\/+$/, "$1");
+  // Windows paths compare case-insensitively, matching workspaceRelativeFilePath.
+  const caseInsensitive = isWindowsAbsolutePath(stripSlashPrefixedWindowsDrive(target.path));
+  const normalize = (value: string) => (caseInsensitive ? value.toLowerCase() : value);
+  const path = normalize(
+    (parseMarkdownFileLink(label)?.path ?? splitFilePathPosition(label.trim()).path)
+      .replaceAll("\\", "/")
+      .replace(/^\.\//, "")
+      .replace(/([^/:])\/+$/, "$1"),
+  );
+  const targetPath = normalize(target.path.replaceAll("\\", "/").replace(/([^/:])\/+$/, "$1"));
   return path === targetPath || targetPath.endsWith(`/${path}`);
 }
