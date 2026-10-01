@@ -35,7 +35,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { ProviderDriverError } from "../Errors.ts";
+import { ProviderDriverError, type ProviderAdapterError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import {
@@ -195,7 +195,10 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const trackAccountSwitch = yield* makeCodexAccountSwitchTracker(
         Effect.logInfo("Codex account changed; stopping live sessions.", { instanceId }).pipe(
           // `adapter` is created below; suspend so the stop resolves it lazily.
-          Effect.andThen(Effect.suspend(() => adapter.stopAll())),
+          // The annotation breaks the inference cycle through `adapter`.
+          Effect.andThen(
+            Effect.suspend((): Effect.Effect<void, ProviderAdapterError> => adapter.stopAll()),
+          ),
         ),
       );
 
