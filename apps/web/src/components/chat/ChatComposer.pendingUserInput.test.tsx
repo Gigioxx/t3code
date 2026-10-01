@@ -11,6 +11,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { fileContextReference } from "../../lib/composerContextRecords";
 import { derivePendingUserInputProgress } from "../../pendingUserInput";
 import { questionAttachmentDraftId } from "../../questionAttachments";
 import type { ComposerPromptEditor } from "../ComposerPromptEditor";
@@ -89,6 +90,9 @@ beforeEach(() => {
     routeKind: "server",
     routeThreadRef: threadRef,
     draftId: null,
+    multipleModelSelections: null,
+    supportsMultipleModels: false,
+    onMultipleModelSelectionsChange: () => {},
     activeThreadId: threadRef.threadId,
     activeThreadEnvironmentId: threadRef.environmentId,
     activeThread: undefined,
@@ -135,6 +139,8 @@ beforeEach(() => {
     keybindings: [],
     terminalOpen: false,
     gitCwd: null,
+    pullRequestProjectId: null,
+    pullRequestRepository: null,
     restingControlsHost: null,
     restingControlsHaveLeadingContext: false,
     onRestingControlsVisibilityChange: () => {},
@@ -147,11 +153,11 @@ beforeEach(() => {
     composerImagesRef: { current: [] },
     composerFilesRef: { current: [] },
     composerTerminalContextsRef: { current: [] },
-    composerElementContextsRef: { current: [] },
     composerRef: { current: null },
     onPageScrollKeyDown: () => {},
     onPageScrollKeyUp: () => {},
     onPageScrollRelease: () => {},
+    onCompactContext: () => {},
     onSend: () => {},
     onInterrupt: () => {},
     onImplementPlanInNewThread: () => {},
@@ -227,7 +233,12 @@ it("keeps typing in the message until answering, and restores each draft and its
   await renderComposer();
 
   const message = "Use the existing migration and keep the API unchanged.";
-  await act(() => editor.onChange(message, message.length, message.length, false, []));
+  // Files are inline chips; an edit that drops the chip reference drops the file.
+  await act(() =>
+    editor.onChange(message, message.length, message.length, false, [
+      fileContextReference(attachment).contextId,
+    ]),
+  );
   expect(props.composerRef.current?.getSendContext()).toMatchObject({
     prompt: message,
     files: [attachment],
