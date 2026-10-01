@@ -4,7 +4,6 @@ import type {
   EnvironmentId,
   PullRequestDetailView,
   PullRequestDiffSide,
-  PullRequestOmittedFileStat,
   PullRequestRef,
   PullRequestReviewPosition,
   PullRequestReviewThread,
@@ -89,8 +88,10 @@ import { PendingReviewCommentCard, ReviewThreadCard } from "./PullRequestReviewA
 import {
   isFileDiffCollapsed,
   isLineInFileDiff,
+  reconcileDiffSlices,
   toggleFileDiffFoldForViewed,
   type DiffFoldOverride,
+  type DiffSlice,
 } from "./pullRequestDiff.logic";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
 import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
@@ -115,16 +116,6 @@ type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
 const COMMIT_PAGE_SIZE = 10;
 
 const PULL_REQUEST_FILE_TREE_STORAGE_KEY = "t3code.pullRequestFileTreeOpen";
-
-/** One answer from the host: a whole number of files, and where the next one carries on. */
-interface DiffSlice {
-  /** What was asked for, null being the first slice. Identifies the slice among the loaded ones. */
-  readonly cursor: string | null;
-  readonly patch: string;
-  readonly truncated: boolean;
-  readonly nextCursor: string | null;
-  readonly omittedFileStats: ReadonlyArray<PullRequestOmittedFileStat>;
-}
 
 /**
  * The viewer's own per-file counts are hidden and drawn from this side of its shadow root
@@ -300,44 +291,22 @@ function PullRequestCodeTab({
   // text would cost more with every slice, which is the wall the slicing exists to remove.
   useEffect(() => {
     const data = diffQuery.data;
-    if (data === null) return;
+    // A refresh keeps answering with the previous value until the new one lands.
+    if (data === null || diffQuery.isPending) return;
     setSliceState((previous) => {
       const slices = previous.key === scopeKey ? previous.slices : NO_SLICES;
-      const next = {
+      const next = reconcileDiffSlices(slices, {
         cursor,
         patch: data.patch,
         truncated: data.truncated,
         nextCursor: data.nextCursor,
         omittedFileStats: data.omittedFileStats ?? [],
-      };
-      const index = slices.findIndex((slice) => slice.cursor === cursor);
-      if (index === -1) {
-        return { key: scopeKey, cursor, slices: [...slices, next] };
-      }
-      const existing = slices[index];
-      if (
-        existing !== undefined &&
-        existing.patch === next.patch &&
-        existing.truncated === next.truncated &&
-        existing.nextCursor === next.nextCursor &&
-        existing.omittedFileStats.length === next.omittedFileStats.length &&
-        existing.omittedFileStats.every((file, index) => {
-          const refreshed = next.omittedFileStats[index];
-          return (
-            refreshed !== undefined &&
-            refreshed.path === file.path &&
-            refreshed.additions === file.additions &&
-            refreshed.deletions === file.deletions
-          );
-        })
-      ) {
-        return previous;
-      }
-      // A page that came back different means the diff moved under the review. The slices
-      // after it go with the replacement: their cursors were positions in the old diff.
-      return { key: scopeKey, cursor, slices: [...slices.slice(0, index), next] };
+      });
+      return next.slices === slices && next.cursor === previous.cursor && previous.key === scopeKey
+        ? previous
+        : { key: scopeKey, ...next };
     });
-  }, [cursor, diffQuery.data, scopeKey]);
+  }, [cursor, diffQuery.data, diffQuery.isPending, scopeKey]);
   // The refresh button rereads from the first page rather than the page the reader is on:
   // pages are positions in one snapshot of the diff, and a fresh snapshot starts over.
   const refreshFirstDiffPage = useAtomRefresh(
@@ -447,15 +416,15 @@ function PullRequestCodeTab({
     refreshFirstDiffPage();
     refreshFilesViewed();
   }, [refreshToken, scopeKey, refreshFirstDiffPage, refreshFilesViewed]);
-  // A background refresh keeps the first page on screen and re-reads it in place. Later pages
-  // are dropped and their cached answers invalidated, so scrolling reads them fresh rather than
-  // trusting an unchanged first page to vouch for the rest of the diff.
+  // A background refresh keeps every loaded page on screen and re-reads them in order from the
+  // first: each unchanged answer moves on to the next page, and a changed one replaces its page
+  // and drops the pages after it, whose cursors were positions in the old diff.
   const registry = useContext(RegistryContext);
   const appliedBackgroundRefreshToken = useRef(backgroundRefreshToken);
   useEffect(() => {
     if (appliedBackgroundRefreshToken.current === backgroundRefreshToken) return;
     appliedBackgroundRefreshToken.current = backgroundRefreshToken;
-    for (const slice of loadedSlices.slice(1)) {
+    for (const slice of loadedSlices) {
       if (slice.cursor === null) continue;
       registry.refresh(
         pullRequestEnvironment.diff({
@@ -464,11 +433,7 @@ function PullRequestCodeTab({
         }),
       );
     }
-    setSliceState((previous) => ({
-      key: previous.key,
-      cursor: null,
-      slices: previous.slices.slice(0, 1),
-    }));
+    setSliceState((previous) => ({ ...previous, cursor: null }));
     refreshFirstDiffPage();
     refreshFilesViewed();
   }, [
@@ -648,8 +613,11 @@ function PullRequestCodeTab({
 
   // A failed slice must not be asked for again on its own. The files already loaded keep the
   // sentinel on screen, so re-arming it after a failure would request the same slice forever.
+  // While a background refresh is still re-reading earlier pages, the cursor sits behind the last
+  // one and the next page waits for it to catch up.
   const canLoadNextSlice =
     nextCursor !== null &&
+    cursor === (loadedSlices.at(-1)?.cursor ?? null) &&
     nextCursor !== cursor &&
     !diffQuery.isPending &&
     diffQuery.error === null;
