@@ -60,7 +60,7 @@ export class DesktopShellEnvironmentCommandTimeoutError extends Schema.TaggedErr
   }
 }
 
-export class DesktopShellEnvironmentCaptureError extends Schema.TaggedErrorClass<DesktopShellEnvironmentCaptureError>()(
+export class DesktopShellEnvironmentCaptureError extends Schema.TaggedError<DesktopShellEnvironmentCaptureError>()(
   "DesktopShellEnvironmentCaptureError",
   {},
 ) {
