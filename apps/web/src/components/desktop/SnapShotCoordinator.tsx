@@ -1,5 +1,6 @@
 import {
   type DesktopPendingSnapShot,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -31,7 +32,10 @@ import {
   getDesktopSnapShotBridge,
   type DesktopSnapShotBridge,
 } from "../../lib/desktopSnapShot";
-import { openQuestionAttachmentDraft } from "../../questionAttachments";
+import {
+  countOpenQuestionRequestAttachments,
+  openQuestionAttachmentDraft,
+} from "../../questionAttachments";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
@@ -169,23 +173,28 @@ export async function deliverSnapShot(
   const dataUrl = compressed.recompressed ? await readFileAsDataUrl(file) : capture.dataUrl;
   const alreadyAttached =
     store.getComposerDraft(target)?.images.some(({ id }) => id === capture.id) ?? false;
+  // Every question of a request shares one attachment limit, which `addImages` only checks per draft.
+  const fitsQuestionLimit =
+    typeof target !== "string" ||
+    countOpenQuestionRequestAttachments(target) < PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
   // `addImage` refuses drafts without a thread session, which a question draft never has.
   if (
     !alreadyAttached &&
-    !store
-      .addImages(target, [
-        {
-          type: "image",
-          id: capture.id,
-          name: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-          previewUrl: dataUrl,
-          file,
-          source,
-        },
-      ])
-      .includes(capture.id)
+    (!fitsQuestionLimit ||
+      !store
+        .addImages(target, [
+          {
+            type: "image",
+            id: capture.id,
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            previewUrl: dataUrl,
+            file,
+            source,
+          },
+        ])
+        .includes(capture.id))
   ) {
     throw new Error("Remove an attachment, then try this capture again.");
   }

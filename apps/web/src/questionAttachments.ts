@@ -28,21 +28,31 @@ export function questionAttachmentDraftId(
 }
 
 const openQuestionDrafts = new Map<string, DraftId>();
+const openQuestionKeys = new Map<DraftId, ReadonlyArray<DraftId>>();
 
 /** The question draft currently receiving attachments for a thread, so SnapShot delivery lands beside drag-drop files instead of on the hidden thread composer. */
 export function openQuestionAttachmentDraft(threadRef: ScopedThreadRef): DraftId | null {
   return openQuestionDrafts.get(scopedThreadKey(threadRef)) ?? null;
 }
 
+/** `questionKeys` lists every question draft of the request, since they share one attachment limit. */
 export function trackOpenQuestionAttachmentDraft(
   threadRef: ScopedThreadRef,
   draftId: DraftId,
+  questionKeys: ReadonlyArray<DraftId>,
 ): () => void {
   const key = scopedThreadKey(threadRef);
   openQuestionDrafts.set(key, draftId);
+  openQuestionKeys.set(draftId, questionKeys);
   return () => {
     if (openQuestionDrafts.get(key) === draftId) openQuestionDrafts.delete(key);
+    if (openQuestionKeys.get(draftId) === questionKeys) openQuestionKeys.delete(draftId);
   };
+}
+
+/** Attachments reserved across the open request that `draftId` answers; 0 for non-question drafts. */
+export function countOpenQuestionRequestAttachments(draftId: DraftId): number {
+  return countQuestionAttachments(openQuestionKeys.get(draftId) ?? []);
 }
 
 export const useQuestionAttachmentPreparation = create<{ counts: Record<string, number> }>(() => ({

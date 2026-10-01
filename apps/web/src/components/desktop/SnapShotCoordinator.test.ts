@@ -3,6 +3,7 @@ import {
   ApprovalRequestId,
   type DesktopPendingSnapShot,
   EnvironmentId,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -325,7 +326,7 @@ describe("open question delivery", () => {
     } as unknown as DesktopSnapShotBridge;
     vi.stubGlobal("window", { localStorage: storage, dispatchEvent: vi.fn() });
     const pins = new Map<string, DraftId | null>();
-    const untrack = trackOpenQuestionAttachmentDraft(threadRef, questionDraft);
+    const untrack = trackOpenQuestionAttachmentDraft(threadRef, questionDraft, [questionDraft]);
     try {
       const target = resolveSnapShotAttachmentTarget(pins, capture.id, threadRef);
       expect(target).toBe(questionDraft);
@@ -348,17 +349,66 @@ describe("open question delivery", () => {
     const second = questionAttachmentDraftId(environmentId, threadRef.threadId, requestId, "q2");
     const pins = new Map<string, DraftId | null>();
 
-    const untrackNone = trackOpenQuestionAttachmentDraft(threadRef, first);
+    const untrackNone = trackOpenQuestionAttachmentDraft(threadRef, first, [first, second]);
     untrackNone();
     expect(resolveSnapShotAttachmentTarget(pins, "before-question", threadRef)).toEqual(threadRef);
-    const untrackFirst = trackOpenQuestionAttachmentDraft(threadRef, first);
+    const untrackFirst = trackOpenQuestionAttachmentDraft(threadRef, first, [first, second]);
     expect(resolveSnapShotAttachmentTarget(pins, "before-question", threadRef)).toEqual(threadRef);
     expect(resolveSnapShotAttachmentTarget(pins, "during-first", threadRef)).toBe(first);
     untrackFirst();
-    const untrackSecond = trackOpenQuestionAttachmentDraft(threadRef, second);
+    const untrackSecond = trackOpenQuestionAttachmentDraft(threadRef, second, [first, second]);
     expect(resolveSnapShotAttachmentTarget(pins, "during-first", threadRef)).toEqual(threadRef);
     expect(resolveSnapShotAttachmentTarget(pins, "during-second", threadRef)).toBe(second);
     untrackSecond();
+  });
+
+  it("refuses a capture once the other questions of the request use the shared limit", async () => {
+    const threadRef = scopeThreadRef(environmentId, ThreadId.make("question-thread"));
+    const requestId = ApprovalRequestId.make("request-1");
+    const first = questionAttachmentDraftId(environmentId, threadRef.threadId, requestId, "q1");
+    const second = questionAttachmentDraftId(environmentId, threadRef.threadId, requestId, "q2");
+    useComposerDraftStore.getState().addImages(
+      first,
+      Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }, (_, index) => ({
+        type: "image" as const,
+        id: `staged-${index}`,
+        name: `staged-${index}.png`,
+        mimeType: "image/png",
+        sizeBytes: 3,
+        previewUrl: "data:image/png;base64,AQID",
+        file: new File([new Uint8Array([1, 2, 3])], `staged-${index}.png`, { type: "image/png" }),
+      })),
+    );
+    const capture = {
+      id: "12345678-1234-1234-1234-123456789abd",
+      name: "window.png",
+      mimeType: "image/png" as const,
+      sizeBytes: 3,
+      dataUrl: "data:image/png;base64,AQID",
+      source: {
+        kind: "snap-shot" as const,
+        capturedAt: "2026-09-01T00:00:00.000Z",
+        appName: "Editor",
+        windowTitle: "main.ts",
+      },
+    };
+    const bridge = {
+      readSnapShot: async () => capture,
+      acknowledgeSnapShot: vi.fn(async () => undefined),
+    } as unknown as DesktopSnapShotBridge;
+    vi.stubGlobal("window", { localStorage: storage, dispatchEvent: vi.fn() });
+    const untrack = trackOpenQuestionAttachmentDraft(threadRef, second, [first, second]);
+    try {
+      await expect(deliverSnapShot(bridge, capture, second)).rejects.toThrow(
+        "Remove an attachment",
+      );
+      expect(useComposerDraftStore.getState().getComposerDraft(second)?.images ?? []).toHaveLength(
+        0,
+      );
+      expect(bridge.acknowledgeSnapShot).not.toHaveBeenCalled();
+    } finally {
+      untrack();
+    }
   });
 });
 

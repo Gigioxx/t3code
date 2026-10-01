@@ -1574,10 +1574,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     supportsQuestionAttachments &&
     activePendingProgress?.activeQuestion?.allowCustomAnswer !== false &&
     !activePendingIsResponding;
+  const questionRequest = pendingUserInputs[0];
   useEffect(() => {
-    if (!questionAttachmentTarget || !questionAcceptsSnapShots) return;
-    return trackOpenQuestionAttachmentDraft(routeThreadRef, questionAttachmentTarget);
-  }, [questionAcceptsSnapShots, questionAttachmentTarget, routeThreadRef]);
+    if (!questionRequest || !questionAttachmentTarget || !questionAcceptsSnapShots) return;
+    const questionKeys = questionRequest.questions.map((question) =>
+      questionAttachmentDraftId(
+        environmentId,
+        activeThreadId!,
+        questionRequest.requestId,
+        question.id,
+      ),
+    );
+    return trackOpenQuestionAttachmentDraft(routeThreadRef, questionAttachmentTarget, questionKeys);
+  }, [
+    activeThreadId,
+    environmentId,
+    questionAcceptsSnapShots,
+    questionAttachmentTarget,
+    questionRequest,
+    routeThreadRef,
+  ]);
   const attachmentTargetKey = composerTargetKey(attachmentDraftTarget);
   // An import that finishes after a draft change must compare against the draft open *now*, not
   // the one captured in the closure that started it.
