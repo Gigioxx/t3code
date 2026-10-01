@@ -2581,7 +2581,9 @@ function useChatMarkdownState({
       }
       // A real child folder named like the project keeps the literal path.
       const paths = new Set(result.value.entries.map((entry) => entry.path));
-      return !paths.has(workspaceRelativePath) && paths.has(strippedPath) ? strippedPath : null;
+      return !paths.has(workspaceRelativePath.replaceAll("\\", "/")) && paths.has(strippedPath)
+        ? strippedPath
+        : null;
     },
     [cwd, environmentId, searchProjectEntries],
   );

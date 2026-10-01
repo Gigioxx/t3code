@@ -1,3 +1,5 @@
+import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+
 // Enough hits to look past same-named neighbours (`ChatView.test.tsx`) without
 // asking for a full listing on a single click.
 export const WORKSPACE_BASENAME_LOOKUP_LIMIT = 25;
@@ -61,9 +63,12 @@ export function pickWorkspaceBasenameMatch(
 export function stripRepeatedWorkspacePrefix(relativePath: string, cwd: string): string | null {
   const pathSegments = relativePath.split(/[\\/]+/);
   const cwdSegments = cwd.split(/[\\/]+/).filter(Boolean);
+  const fold = isWindowsAbsolutePath(cwd)
+    ? (segment: string | undefined) => segment?.toLowerCase()
+    : (segment: string | undefined) => segment;
   for (let count = Math.min(cwdSegments.length, pathSegments.length - 1); count > 0; count--) {
     const prefix = cwdSegments.slice(-count);
-    if (prefix.every((segment, index) => segment === pathSegments[index])) {
+    if (prefix.every((segment, index) => fold(segment) === fold(pathSegments[index]))) {
       return pathSegments.slice(count).join("/");
     }
   }

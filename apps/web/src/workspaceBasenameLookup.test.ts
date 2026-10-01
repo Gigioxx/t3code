@@ -103,6 +103,8 @@ describe("stripRepeatedWorkspacePrefix", () => {
       "a.md",
     );
     expect(stripRepeatedWorkspacePrefix("physics\\a.md", "C:\\school\\physics")).toBe("a.md");
+    expect(stripRepeatedWorkspacePrefix("physics\\a.md", "C:\\school\\Physics")).toBe("a.md");
+    expect(stripRepeatedWorkspacePrefix("physics/a.md", "/school/Physics")).toBeNull();
   });
 
   it("returns null when the path does not start with the project folder", () => {
