@@ -23,17 +23,9 @@ import {
   TextWrapIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { RegistryContext, useAtomRefresh } from "@effect/atom-react";
+import { useAtomRefresh } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
@@ -289,24 +281,31 @@ function PullRequestCodeTab({
   );
   // Each answer is kept as its own slice. Concatenating the patches and re-parsing the growing
   // text would cost more with every slice, which is the wall the slicing exists to remove.
+  // When the last background refresh began. An answer older than that is a cached page, so it is
+  // re-read before it may vouch for the page on screen.
+  const revalidateAfter = useRef(0);
+  const { data: diffData, dataUpdatedAt, error: diffError, isPending, refresh } = diffQuery;
   useEffect(() => {
-    const data = diffQuery.data;
     // A refresh keeps answering with the previous value until the new one lands.
-    if (data === null || diffQuery.isPending) return;
+    if (diffData === null || isPending || diffError !== null) return;
+    if ((dataUpdatedAt ?? 0) < revalidateAfter.current) {
+      refresh();
+      return;
+    }
     setSliceState((previous) => {
       const slices = previous.key === scopeKey ? previous.slices : NO_SLICES;
       const next = reconcileDiffSlices(slices, {
         cursor,
-        patch: data.patch,
-        truncated: data.truncated,
-        nextCursor: data.nextCursor,
-        omittedFileStats: data.omittedFileStats ?? [],
+        patch: diffData.patch,
+        truncated: diffData.truncated,
+        nextCursor: diffData.nextCursor,
+        omittedFileStats: diffData.omittedFileStats ?? [],
       });
       return next.slices === slices && next.cursor === previous.cursor && previous.key === scopeKey
         ? previous
         : { key: scopeKey, ...next };
     });
-  }, [cursor, diffQuery.data, diffQuery.isPending, scopeKey]);
+  }, [cursor, dataUpdatedAt, diffData, diffError, isPending, refresh, scopeKey]);
   // The refresh button rereads from the first page rather than the page the reader is on:
   // pages are positions in one snapshot of the diff, and a fresh snapshot starts over.
   const refreshFirstDiffPage = useAtomRefresh(
@@ -419,33 +418,15 @@ function PullRequestCodeTab({
   // A background refresh keeps every loaded page on screen and re-reads them in order from the
   // first: each unchanged answer moves on to the next page, and a changed one replaces its page
   // and drops the pages after it, whose cursors were positions in the old diff.
-  const registry = useContext(RegistryContext);
   const appliedBackgroundRefreshToken = useRef(backgroundRefreshToken);
   useEffect(() => {
     if (appliedBackgroundRefreshToken.current === backgroundRefreshToken) return;
     appliedBackgroundRefreshToken.current = backgroundRefreshToken;
-    for (const slice of loadedSlices) {
-      if (slice.cursor === null) continue;
-      registry.refresh(
-        pullRequestEnvironment.diff({
-          environmentId,
-          input: { ...reference, cursor: slice.cursor, ...(commit === null ? {} : { commit }) },
-        }),
-      );
-    }
+    revalidateAfter.current = Date.now();
     setSliceState((previous) => ({ ...previous, cursor: null }));
     refreshFirstDiffPage();
     refreshFilesViewed();
-  }, [
-    backgroundRefreshToken,
-    commit,
-    environmentId,
-    loadedSlices,
-    reference,
-    refreshFirstDiffPage,
-    refreshFilesViewed,
-    registry,
-  ]);
+  }, [backgroundRefreshToken, refreshFirstDiffPage, refreshFilesViewed]);
   const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
   // What a slice withheld: the host declining to inline part of it, or a patch the viewer could
   // not structure and so dropped. Neither says anything about there being more to fetch.
