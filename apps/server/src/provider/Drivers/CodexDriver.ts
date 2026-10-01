@@ -21,12 +21,11 @@
  *
  * @module provider/Drivers/CodexDriver
  */
-import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
+import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -41,7 +40,7 @@ import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import {
   checkCodexProviderStatus,
-  hasCodexAccountChanged,
+  makeCodexAccountSwitchTracker,
   makePendingCodexProvider,
   probeCodexSkillsForCwd,
   withCodexAppServerClient,
@@ -190,6 +189,16 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         ),
       );
 
+      // Live sessions keep the account they spawned with. When a probe shows a
+      // different login, stop them so the next send respawns app-server with
+      // the current credentials (the same path as Stop or the idle reaper).
+      const trackAccountSwitch = yield* makeCodexAccountSwitchTracker(
+        Effect.logInfo("Codex account changed; stopping live sessions.", { instanceId }).pipe(
+          // `adapter` is created below; suspend so the stop resolves it lazily.
+          Effect.andThen(Effect.suspend(() => adapter.stopAll())),
+        ),
+      );
+
       // Build a managed snapshot whose settings never change — mutations come
       // in as instance rebuilds from the registry rather than in-place
       // updates. Pre-provide `ChildProcessSpawner` so the check fits
@@ -197,13 +206,6 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Kick the TTL-gated manifest refresh in the background and classify
       // with the in-memory manifest, so a slow or hung fetch never delays the
       // provider check. A refresh that lands mid-probe applies on the next one.
-      // Live sessions keep the account they spawned with. When a probe shows a
-      // different login, stop them so the next send respawns app-server with
-      // the current credentials (the same path as Stop or the idle reaper).
-      // Only signed-in probes move the baseline, and a switch moves it only
-      // after the stop succeeds, so a logout, failed probe, or failed stop in
-      // between does not hide the switch from the next probe.
-      const lastProbedAuth = yield* Ref.make<ServerProvider["auth"] | null>(null);
       const checkProvider = modelManifest.refreshInBackground.pipe(
         Effect.andThen(
           Effect.zipWith(
@@ -215,26 +217,14 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           ),
         ),
         Effect.tap((probed) =>
-          probed.auth.status !== "authenticated"
-            ? Effect.void
-            : Ref.get(lastProbedAuth).pipe(
-                Effect.flatMap((previous) =>
-                  hasCodexAccountChanged(previous, probed.auth)
-                    ? Effect.logInfo("Codex account changed; stopping live sessions.", {
-                        instanceId,
-                      }).pipe(
-                        Effect.andThen(adapter.stopAll()),
-                        Effect.andThen(Ref.set(lastProbedAuth, probed.auth)),
-                        Effect.catchCause((cause) =>
-                          Effect.logWarning("Failed to stop Codex sessions after account change.", {
-                            instanceId,
-                            cause,
-                          }),
-                        ),
-                      )
-                    : Ref.set(lastProbedAuth, probed.auth),
-                ),
-              ),
+          trackAccountSwitch(probed.auth).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to stop Codex sessions after account change.", {
+                instanceId,
+                cause,
+              }),
+            ),
+          ),
         ),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );

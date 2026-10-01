@@ -3,6 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -558,6 +559,29 @@ export function hasCodexAccountChanged(
   }
   return previous.type !== next.type || previous.email !== next.email;
 }
+
+/**
+ * Runs `stopLiveSessions` when a probe reports a different signed-in account.
+ * Only signed-in probes move the baseline, and a switch moves it only after the
+ * stop succeeds, so a logout, failed probe, or failed stop in between does not
+ * hide the switch from the next probe.
+ */
+export const makeCodexAccountSwitchTracker = <E>(stopLiveSessions: Effect.Effect<void, E>) =>
+  Ref.make<ServerProvider["auth"] | null>(null).pipe(
+    Effect.map(
+      (lastProbedAuth) =>
+        (auth: ServerProvider["auth"]): Effect.Effect<void, E> =>
+          auth.status !== "authenticated"
+            ? Effect.void
+            : Ref.get(lastProbedAuth).pipe(
+                Effect.flatMap((previous) =>
+                  hasCodexAccountChanged(previous, auth)
+                    ? stopLiveSessions.pipe(Effect.andThen(Ref.set(lastProbedAuth, auth)))
+                    : Ref.set(lastProbedAuth, auth),
+                ),
+              ),
+    ),
+  );
 
 function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]): {
   readonly status: Exclude<ServerProviderState, "disabled">;

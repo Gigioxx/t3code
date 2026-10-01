@@ -1,8 +1,10 @@
 import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import {
   applyPreferredCodexDefaultModel,
   hasCodexAccountChanged,
+  makeCodexAccountSwitchTracker,
   mapCodexModelCapabilities,
 } from "./CodexProvider.ts";
 
@@ -187,3 +189,32 @@ it("detects a switch between two signed-in Codex accounts and nothing else", () 
   assert.isFalse(hasCodexAccountChanged(alice, { status: "unauthenticated" }));
   assert.isFalse(hasCodexAccountChanged({ status: "unknown" }, alice));
 });
+
+it.effect("stops live sessions on an account switch and retries a failed stop", () =>
+  Effect.gen(function* () {
+    const alice = { status: "authenticated", type: "chatgpt", email: "alice@example.com" } as const;
+    const bob = { status: "authenticated", type: "chatgpt", email: "bob@example.com" } as const;
+    let stops = 0;
+    let failNextStop = false;
+    const track = yield* makeCodexAccountSwitchTracker(
+      Effect.suspend(() => {
+        stops++;
+        if (!failNextStop) return Effect.void;
+        failNextStop = false;
+        return Effect.fail("stop failed");
+      }),
+    );
+
+    yield* track(alice);
+    yield* track(alice);
+    yield* track({ status: "unauthenticated" });
+    assert.strictEqual(stops, 0);
+
+    failNextStop = true;
+    assert.strictEqual(yield* Effect.flip(track(bob)), "stop failed");
+    yield* track(bob);
+    assert.strictEqual(stops, 2);
+    yield* track(bob);
+    assert.strictEqual(stops, 2);
+  }),
+);
