@@ -175,6 +175,7 @@ import { projectEnvironment } from "../state/projects";
 import {
   claimWorkspaceBasenameLookup,
   needsWorkspaceBasenameLookup,
+  pickStrippedWorkspaceMatch,
   pickWorkspaceBasenameMatch,
   stripRepeatedWorkspacePrefix,
   WORKSPACE_BASENAME_LOOKUP_LIMIT,
@@ -2579,11 +2580,12 @@ function useChatMarkdownState({
       if (strippedPath === null) {
         return pickWorkspaceBasenameMatch(workspaceRelativePath, result.value.entries);
       }
-      // A real child folder named like the project keeps the literal path.
-      const paths = new Set(result.value.entries.map((entry) => entry.path));
-      return !paths.has(workspaceRelativePath.replaceAll("\\", "/")) && paths.has(strippedPath)
-        ? strippedPath
-        : null;
+      return pickStrippedWorkspaceMatch(
+        workspaceRelativePath,
+        strippedPath,
+        cwd,
+        result.value.entries,
+      );
     },
     [cwd, environmentId, searchProjectEntries],
   );

@@ -74,3 +74,26 @@ export function stripRepeatedWorkspacePrefix(relativePath: string, cwd: string):
   }
   return null;
 }
+
+/**
+ * Resolves a stripped path against index entries. A real child folder named
+ * like the project keeps the literal path, so this returns null when the
+ * literal path is indexed too.
+ */
+export function pickStrippedWorkspaceMatch(
+  literalPath: string,
+  strippedPath: string,
+  cwd: string,
+  entries: ReadonlyArray<WorkspaceEntryCandidate>,
+): string | null {
+  const caseInsensitive = isWindowsAbsolutePath(cwd);
+  const key = (path: string) => {
+    const normalized = path.replaceAll("\\", "/");
+    return caseInsensitive ? normalized.toLowerCase() : normalized;
+  };
+  const pathsByKey = new Map(
+    entries.filter((entry) => entry.kind === "file").map((entry) => [key(entry.path), entry.path]),
+  );
+  if (pathsByKey.has(key(literalPath))) return null;
+  return pathsByKey.get(key(strippedPath)) ?? null;
+}
