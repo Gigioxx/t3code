@@ -212,6 +212,30 @@ function buildConnectingSplashDataUrl(shouldUseDarkColors: boolean): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
+// server-child.log is NDJSON. Show only the last run's output without stack
+// frames so the failure dialog fits on screen; Copy Logs keeps the full file.
+export function summarizeBackendChildLog(logs: string): string {
+  let output: Array<string> = [];
+  for (const line of logs.split("\n")) {
+    if (line.trim() === "") continue;
+    let entry: { message?: unknown; annotations?: { text?: unknown } };
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      output.push(line);
+      continue;
+    }
+    if (entry.message === "backend child process failure output start") output = [];
+    if (typeof entry.annotations?.text === "string") output.push(entry.annotations.text);
+  }
+  return output
+    .join("\n")
+    .split("\n")
+    .filter((line) => line.trim() !== "" && !/^\s+at /.test(line))
+    .join("\n")
+    .slice(-1_500);
+}
+
 export function isSameOriginRendererNavigation(input: {
   readonly applicationUrl: string;
   readonly navigationUrl: string;
@@ -355,7 +379,7 @@ export const make = Effect.gen(function* () {
     if (yield* Ref.getAndSet(failureVisible, true)) return;
     const logPath = environment.path.join(environment.logDir, "server-child.log");
     const logs = yield* fileSystem.readFileString(logPath).pipe(Effect.orElseSucceed(() => ""));
-    const detail = `${reason}\n\n${logs.slice(-4_000)}\n\nLogs: ${logPath}`;
+    const detail = `${reason}\n\n${summarizeBackendChildLog(logs)}\n\nLogs: ${logPath}`;
     while (true) {
       const { response } = yield* electronDialog
         .showMessageBox(

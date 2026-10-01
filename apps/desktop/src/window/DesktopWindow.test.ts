@@ -620,6 +620,27 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it("summarizes the last backend run from the NDJSON child log", () => {
+    const entry = (message: string, text?: string) =>
+      JSON.stringify({ message, annotations: text === undefined ? {} : { text } });
+    const log = [
+      entry("backend child process failure output start"),
+      entry("backend child process output", "old run failure"),
+      entry("backend child process failure output end"),
+      entry("backend child process failure output start"),
+      entry(
+        "backend child process output",
+        "ERROR: SqlError: Failed to prepare statement\n    at catch (bin.mjs:1:1)\n  [cause]: Error: file is not a database\n",
+      ),
+      entry("backend child process failure output end"),
+    ].join("\n");
+
+    assert.equal(
+      DesktopWindow.summarizeBackendChildLog(log),
+      "ERROR: SqlError: Failed to prepare statement\n  [cause]: Error: file is not a database",
+    );
+  });
+
   it("leaves fullscreen before concealing a pending quit", () => {
     const fakeWindow = makeFakeBrowserWindow();
 
