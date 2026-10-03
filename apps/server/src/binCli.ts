@@ -85,8 +85,10 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
 export const cli = makeCli();
 
 export function runCli() {
-  // Allow 1 s per address: Node's 250 ms limit drops slow-but-working connects when IPv6 fails fast.
-  NodeNet.setDefaultAutoSelectFamilyAttemptTimeout(1_000);
+  // At least 1 s per address: Node's 250 ms limit drops slow-but-working connects when IPv6 fails fast.
+  NodeNet.setDefaultAutoSelectFamilyAttemptTimeout(
+    Math.max(NodeNet.getDefaultAutoSelectFamilyAttemptTimeout(), 1_000),
+  );
   Command.run(cli, { version: packageJson.version }).pipe(
     Effect.scoped,
     Effect.provide(CliRuntimeLayer),
