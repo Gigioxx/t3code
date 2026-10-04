@@ -6230,7 +6230,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
-  it.effect("records subagent usage from task progress and completion", () =>
+  it.effect("records subagent usage from task frames and clears it on resume", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const TASK_ID = "task-subagent-usage";
@@ -6275,6 +6275,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             uuid: "00000000-0000-4000-8000-000000000363",
             session_id: WAKE_NATIVE_SESSION,
           }),
+          // A resume reports fresh usage on its own frames.
+          makeSubagentTaskStartedFrame({
+            taskId: TASK_ID,
+            toolUseId: TOOL_USE_ID,
+            uuid: "00000000-0000-4000-8000-000000000365",
+          }),
           makeResultFrame({
             uuid: "00000000-0000-4000-8000-000000000364",
             result: "The auditor finished.",
@@ -6292,6 +6298,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           undefined,
           { contextTokens: 12_000, toolUses: 2 },
           { contextTokens: 18_500, toolUses: 5 },
+          undefined,
         ]);
       }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
     ),

@@ -4035,16 +4035,17 @@ export function makeClaudeAdapterV2(
           const turnItemOrdinal =
             existingSubagent?.turnItemOrdinal ??
             (yield* resolveItemOrdinal(input.context, `${nativeItemId}:subagent`));
-          // A resumed subagent's previous final answer and progress no longer
-          // represent its outcome; the next task_progress/task_notification
+          // A resumed subagent's previous final answer, progress, and usage no
+          // longer represent its outcome; the next task_progress/task_notification
           // carry the new ones.
           const priorTask =
             existingSubagent === undefined
               ? undefined
               : isReopen
-                ? (({ progress: _staleProgress, ...rest }) => ({ ...rest, result: null }))(
-                    existingSubagent.task,
-                  )
+                ? (({ progress: _staleProgress, usage: _staleUsage, ...rest }) => ({
+                    ...rest,
+                    result: null,
+                  }))(existingSubagent.task)
                 : existingSubagent.task;
           const task = {
             ...(priorTask ?? {
@@ -5127,7 +5128,11 @@ export function makeClaudeAdapterV2(
               if (registered === undefined || registered.task.status === "running") {
                 return current;
               }
-              const { progress: _staleProgress, ...priorTask } = registered.task;
+              const {
+                progress: _staleProgress,
+                usage: _staleUsage,
+                ...priorTask
+              } = registered.task;
               return new Map(current).set(message.task_id, {
                 ...registered,
                 task: {
