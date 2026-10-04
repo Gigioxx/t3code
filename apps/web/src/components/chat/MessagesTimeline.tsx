@@ -317,7 +317,7 @@ interface TimelineRowSharedState {
     readonly checkpointId: string;
     readonly scopeId: string;
   }) => void;
-  onToggleTurnFold: (runId: RunId) => void;
+  onToggleTurnFold: (expandKey: string) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
   onFileDownload: (attachment: ChatFileAttachment) => void;
@@ -551,7 +551,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => readTimelinePosition(listIdentityKey),
     [listIdentityKey],
   );
-  const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(
+  const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<string>>(
     () => rememberedPosition?.disclosures?.runs ?? new Set(),
   );
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(
@@ -663,14 +663,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, []);
 
   const onToggleTurnFold = useCallback(
-    (runId: RunId) => {
-      suspendEndScrollMaintenanceForDisclosure(`turn-fold:${runId}`);
+    (expandKey: string) => {
+      suspendEndScrollMaintenanceForDisclosure(`turn-fold:${expandKey}`);
       setExpandedRunIds((existing) => {
         const next = new Set(existing);
-        if (next.has(runId)) {
-          next.delete(runId);
+        if (next.has(expandKey)) {
+          next.delete(expandKey);
         } else {
-          next.add(runId);
+          next.add(expandKey);
         }
         return next;
       });
@@ -2436,7 +2436,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         type="button"
         aria-expanded={row.expanded}
         data-scroll-anchor-ignore
-        onClick={() => ctx.onToggleTurnFold(row.runId)}
+        onClick={() => ctx.onToggleTurnFold(row.expandKey)}
         className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span>{row.label}</span>
