@@ -5388,7 +5388,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 // Only an existing image embed counts; a plain path mention or link still needs a preview.
                 const escapedPath = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
                 if (!new RegExp(`!\\[[^\\]]*\\]\\(<?${escapedPath}>?[\\s)]`).test(text)) {
-                  text += `${text.length > 0 ? "\n\n" : ""}![](<${path}>)`;
+                  text += `${text.length > 0 ? "\n\n" : ""}![](<${path.replace(/[<>]/g, "\\$&")}>)`;
                 }
               }
               // Settled timelines retain the final assistant message, so attach images there.

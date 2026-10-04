@@ -3354,6 +3354,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       image: {},
       appends: true,
     },
+    {
+      name: "angle bracket path",
+      reply: "Done.",
+      image: { savedPath: "/tmp/a<b>.png" },
+      appends: true,
+      embed: "![](</tmp/a\\<b\\>.png>)",
+    },
     { name: "existing image", reply: "![Generated](</tmp/generated image.png>)", image: {} },
     {
       name: "existing plain image",
@@ -3369,7 +3376,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     { name: "missing path", reply: "Done.", image: { savedPath: null } },
     { name: "empty path", reply: "Done.", image: { savedPath: "" } },
     { name: "no assistant message", reply: null, image: {} },
-  ])("projects native image generation: $name", ({ reply, image, appends }) =>
+  ])("projects native image generation: $name", ({ reply, image, appends, embed }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const scenario = "codex-native-image";
@@ -3419,7 +3426,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
         const messages = assistantMessages(harness.events);
         const final = messages.at(-1)?.message;
-        const markdown = `![](<${savedPath}>)`;
+        const markdown = embed ?? `![](<${savedPath}>)`;
         const expected = reply === null ? markdown : appends ? `${reply}\n\n${markdown}` : reply;
         assert.strictEqual(final?.text, expected);
         assert.strictEqual(final?.streaming, false);
