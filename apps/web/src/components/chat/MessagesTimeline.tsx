@@ -730,11 +730,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return;
     }
     setExpandedRunIds((existing) => {
-      if (!existing.has(previous.runId)) {
+      const previousKeys = [...existing].filter(
+        (key) => key === previous.runId || key.startsWith(`${previous.runId}:`),
+      );
+      if (previousKeys.length === 0) {
         return existing;
       }
       const next = new Set(existing);
-      next.delete(previous.runId);
+      for (const key of previousKeys) next.delete(key);
       return next;
     });
   }, [latestRun]);

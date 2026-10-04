@@ -2688,11 +2688,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       return;
     }
     setInteractionState((current) => {
-      if (!current.expandedTurnIds.has(previous.runId)) {
+      const previousKeys = [...current.expandedTurnIds].filter(
+        (key) => key === previous.runId || key.startsWith(`${previous.runId}:`),
+      );
+      if (previousKeys.length === 0) {
         return current;
       }
       const next = new Set(current.expandedTurnIds);
-      next.delete(previous.runId);
+      for (const key of previousKeys) next.delete(key);
       return { ...current, expandedTurnIds: next };
     });
   }, [props.latestRun]);
