@@ -1828,7 +1828,7 @@ describe("deriveMessagesTimelineRows", () => {
         rows.map((row) => (row.kind === "turn-fold" ? `${row.id} ${row.label}` : row.id)),
       ).toEqual([
         "initial-prompt",
-        `turn-fold:${runId} Worked for 30s`,
+        `turn-fold:${runId}:work-1 Worked for 30s`,
         "steer",
         `turn-fold:${runId}:work-2 Worked for 20s`,
         "final",
@@ -1850,8 +1850,95 @@ describe("deriveMessagesTimelineRows", () => {
       });
       expect(expandedAfterSteer.some((row) => row.id === "work-1")).toBe(false);
       expect(expandedAfterSteer.some((row) => row.id === "work-2")).toBe(true);
+
+      // An interrupt or citation expands the run by id, which opens every fold.
+      const expandedRun = deriveMessagesTimelineRows({
+        timelineEntries: [
+          prompt("initial-prompt", 0, "turn_start"),
+          work("work-1", 5),
+          prompt("steer", 30, inputIntent),
+          work("work-2", 35),
+          final,
+        ],
+        latestRun: { runId, status: "completed", startedAt: time(0), completedAt: time(50) },
+        expandedRunIds: new Set([runId]),
+        isWorking: false,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+      expect(expandedRun.filter((row) => row.id === "work-1" || row.id === "work-2")).toHaveLength(
+        2,
+      );
     },
   );
+
+  it("splits only the steered run when another run's work follows the steer", () => {
+    const runId = RunId.make("steered-run");
+    const otherRunId = RunId.make("other-run");
+    const time = (second: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, second)).toISOString();
+    const prompt = (id: string, second: number, inputIntent: "turn_start" | "steer") => ({
+      kind: "message" as const,
+      id,
+      createdAt: time(second),
+      message: {
+        id: MessageId.make(id),
+        role: "user" as const,
+        text: id,
+        runId,
+        inputIntent,
+        createdAt: time(second),
+        updatedAt: time(second),
+        streaming: false,
+      },
+    });
+    const work = (id: string, second: number, workRunId: RunId) => ({
+      kind: "work" as const,
+      id,
+      createdAt: time(second),
+      entry: {
+        id,
+        createdAt: time(second),
+        runId: workRunId,
+        label: "Ran command",
+        tone: "tool" as const,
+      },
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        prompt("initial-prompt", 0, "turn_start"),
+        work("work-1", 5, runId),
+        prompt("steer", 30, "steer"),
+        work("other-work", 32, otherRunId),
+        work("work-2", 35, runId),
+        {
+          kind: "message" as const,
+          id: "final",
+          createdAt: time(50),
+          message: {
+            id: MessageId.make("final"),
+            role: "assistant" as const,
+            text: "Done",
+            runId,
+            createdAt: time(50),
+            updatedAt: time(50),
+            streaming: false,
+          },
+        },
+      ],
+      latestRun: { runId, status: "completed", startedAt: time(0), completedAt: time(50) },
+      isWorking: false,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    expect(
+      rows.flatMap((row) =>
+        row.kind === "turn-fold" && row.runId === runId ? [`${row.id} ${row.label}`] : [],
+      ),
+    ).toEqual([
+      `turn-fold:${runId}:work-1 Worked for 30s`,
+      `turn-fold:${runId}:work-2 Worked for 20s`,
+    ]);
+  });
 
   it("keeps the previous turn folded while a newly sent message awaits its turn", () => {
     // Right after send, isWorking is true but latestRun still points at the

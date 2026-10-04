@@ -317,7 +317,7 @@ interface TimelineRowSharedState {
     readonly checkpointId: string;
     readonly scopeId: string;
   }) => void;
-  onToggleTurnFold: (expandKey: string) => void;
+  onToggleTurnFold: (fold: { runId: RunId; expandKey: string; expanded: boolean }) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
   onFileDownload: (attachment: ChatFileAttachment) => void;
@@ -663,12 +663,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, []);
 
   const onToggleTurnFold = useCallback(
-    (expandKey: string) => {
+    ({ runId, expandKey, expanded }: { runId: RunId; expandKey: string; expanded: boolean }) => {
       suspendEndScrollMaintenanceForDisclosure(`turn-fold:${expandKey}`);
       setExpandedRunIds((existing) => {
         const next = new Set(existing);
-        if (next.has(expandKey)) {
+        // An interrupt or citation expands the whole run by its id.
+        if (expanded) {
           next.delete(expandKey);
+          next.delete(runId);
         } else {
           next.add(expandKey);
         }
@@ -2436,7 +2438,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         type="button"
         aria-expanded={row.expanded}
         data-scroll-anchor-ignore
-        onClick={() => ctx.onToggleTurnFold(row.expandKey)}
+        onClick={() => ctx.onToggleTurnFold(row)}
         className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span>{row.label}</span>

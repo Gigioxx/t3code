@@ -944,7 +944,7 @@ export function threadFeedActivityIsVisible(
 }
 
 interface ThreadFeedRunFold {
-  /** The run id, or `${runId}:${anchorId}` for a fold that follows a steer. */
+  /** The run id, or `${runId}:${anchorId}` when steers split the run into several folds. */
   readonly expandKey: string;
   readonly runId: RunId;
   readonly createdAt: string;
@@ -1002,11 +1002,15 @@ function deriveThreadFeedRunFolds(
   // first V2 run must not unfold every imported turn above it.
   let runlessKey: RunId | null = null;
   let pendingUserBoundary: string | null = null;
-  let pendingSteer: string | null = null;
+  let pendingSteer: { createdAt: string; runId: RunId | null } | null = null;
   for (const entry of feed) {
     if (entry.type === "message" && entry.message.role === "user") {
       pendingUserBoundary = entry.message.createdAt;
-      pendingSteer = entry.message.createdAt;
+      pendingSteer =
+        entry.message.inputIntent === "steer" ||
+        entry.message.inputIntent === "promoted_queued_to_steer"
+          ? { createdAt: entry.message.createdAt, runId: entry.message.runId ?? null }
+          : null;
       runlessKey = entry.message.runId == null ? RunId.make(`runless:${entry.id}`) : null;
       continue;
     }
@@ -1024,8 +1028,11 @@ function deriveThreadFeedRunFolds(
       pendingSteer = null;
       groupsByRunId.set(runId, group);
     }
-    if (pendingSteer) {
-      group.segments.push({ startIndex: group.entries.length, startBoundary: pendingSteer });
+    if (pendingSteer && (pendingSteer.runId === null || pendingSteer.runId === runId)) {
+      group.segments.push({
+        startIndex: group.entries.length,
+        startBoundary: pendingSteer.createdAt,
+      });
       pendingSteer = null;
     }
     group.entries.push(entry);
@@ -1087,7 +1094,7 @@ function deriveThreadFeedRunFolds(
     if (!firstEntry || !lastEntry) continue;
     const sections = [{ startIndex: 0, startBoundary: group.startBoundary }, ...group.segments]
       .map((section, index, all) => ({
-        startBoundary: section.startBoundary,
+        endBoundary: all[index + 1]?.startBoundary ?? null,
         hiddenEntries: group.entries
           .slice(section.startIndex, all[index + 1]?.startIndex)
           .filter((entry) => hiddenEntryIds.has(entry.id)),
@@ -1117,18 +1124,19 @@ function deriveThreadFeedRunFolds(
           };
     const interrupted =
       latestRunMatches && (latestRun.status === "interrupted" || latestRun.status === "cancelled");
-    // Sections span from their steer to the next one, so they add up to the run.
+    // Each fold runs until the steer after it; time without folded work joins
+    // the next fold, so the folds add up to the run.
+    let sectionStart = runTiming.start;
     for (const [index, section] of sections.entries()) {
       const anchor = section.hiddenEntries[0];
       if (!anchor) continue;
       const nextSection = sections[index + 1];
-      const elapsedMs = computeElapsedMs(
-        index === 0 ? runTiming.start : (section.startBoundary ?? runTiming.start),
-        nextSection?.startBoundary ?? runTiming.end,
-      );
+      const sectionEnd = nextSection ? (section.endBoundary ?? runTiming.end) : runTiming.end;
+      const elapsedMs = computeElapsedMs(sectionStart, sectionEnd);
+      sectionStart = sectionEnd;
       const duration = elapsedMs === null ? null : formatDuration(elapsedMs);
       foldsByAnchorId.set(anchor.id, {
-        expandKey: index === 0 ? runId : `${runId}:${anchor.id}`,
+        expandKey: sections.length === 1 ? runId : `${runId}:${anchor.id}`,
         runId,
         createdAt: anchor.createdAt,
         hiddenEntryIds: new Set(section.hiddenEntries.map((entry) => entry.id)),
@@ -1202,9 +1210,12 @@ export function deriveThreadFeedPresentation(
     latestRun,
     isWorking && runlessWorkActive,
   );
+  // A run id expands every fold of that run.
+  const foldExpanded = (fold: ThreadFeedRunFold) =>
+    expandedRunIds.has(fold.expandKey) || expandedRunIds.has(fold.runId);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
-    if (!expandedRunIds.has(fold.expandKey)) {
+    if (!foldExpanded(fold)) {
       for (const entryId of fold.hiddenEntryIds) collapsedEntryIds.add(entryId);
     }
   }
@@ -1221,7 +1232,7 @@ export function deriveThreadFeedPresentation(
       entry.runId === activeRunId;
     const fold = foldsByAnchorId.get(entry.id);
     if (fold) {
-      const expanded = expandedRunIds.has(fold.expandKey);
+      const expanded = foldExpanded(fold);
       let row = runFoldRowsCache.get(entry);
       if (
         !row ||

@@ -1503,7 +1503,11 @@ function renderFeedEntry(
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string, anchorKey?: string) => void;
     readonly onToggleWorkRow: (rowId: string, anchorKey?: string) => void;
-    readonly onToggleTurnFold: (expandKey: string) => void;
+    readonly onToggleTurnFold: (fold: {
+      readonly runId: RunId;
+      readonly expandKey: string;
+      readonly expanded: boolean;
+    }) => void;
     readonly onPressPreview: (source: FilePreviewSource) => void;
     readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
     readonly markdownLinkHandlers: MarkdownLinkHandlers;
@@ -1531,7 +1535,7 @@ function renderFeedEntry(
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: entry.expanded }}
-        onPress={() => props.onToggleTurnFold(entry.expandKey)}
+        onPress={() => props.onToggleTurnFold(entry)}
         hitSlop={4}
         className="mb-1 min-h-11 flex-row items-center gap-2 border-b border-border-subtle px-2"
         style={{
@@ -2814,12 +2818,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
 
   const onToggleTurnFold = useCallback(
-    (expandKey: string) => {
+    ({
+      runId,
+      expandKey,
+      expanded,
+    }: {
+      readonly runId: RunId;
+      readonly expandKey: string;
+      readonly expanded: boolean;
+    }) => {
       suspendEndScrollMaintenanceForDisclosure(`run-fold:${expandKey}`);
       setInteractionState((current) => {
         const next = new Set(current.expandedTurnIds);
-        if (next.has(expandKey)) {
+        // An interrupt expands the whole run by its id.
+        if (expanded) {
           next.delete(expandKey);
+          next.delete(runId);
         } else {
           next.add(expandKey);
         }

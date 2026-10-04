@@ -1016,6 +1016,76 @@ describe("buildThreadFeed", () => {
       null,
       null,
     ]);
+
+    const expandedRun = deriveThreadFeedPresentation(feed, latestRun, new Set([runId]));
+    expect(
+      expandedRun.flatMap((entry) => (entry.type === "run-fold" ? [entry.expanded] : [])),
+    ).toEqual([true, true]);
+  });
+
+  it("gives the time after a steer without folded work to the next fold", () => {
+    const at = (second: number) => `2026-06-20T00:00:${String(second).padStart(2, "0")}.000Z`;
+    const steer = (id: string, second: number) => ({
+      ...userMessage(at(second)),
+      id: TurnItemId.make(id),
+      messageId: MessageId.make(id),
+      inputIntent: "steer" as const,
+    });
+    const assistant = (id: string, second: number) => ({
+      ...assistantMessage(at(second)),
+      id: TurnItemId.make(id),
+      messageId: MessageId.make(id),
+    });
+    const feed = buildThreadFeed([
+      projected(userMessage(at(0)), 0),
+      projected(command(at(5)), 1),
+      projected(steer("steer-1", 20), 2),
+      projected(assistant("first-answer", 25), 3),
+      projected(steer("steer-2", 30), 4),
+      projected({ ...command(at(35)), id: TurnItemId.make("item-command-2") }, 5),
+      projected(assistant("final-answer", 50), 6),
+    ]);
+    const latestRun = {
+      runId,
+      status: "completed" as const,
+      startedAt: at(0),
+      completedAt: at(50),
+    };
+
+    expect(
+      deriveThreadFeedPresentation(feed, latestRun, new Set()).flatMap((entry) =>
+        entry.type === "run-fold" ? [entry.label] : [],
+      ),
+    ).toEqual(["Worked for 20s", "Worked for 30s"]);
+  });
+
+  it("does not split a run fold at a queued prompt", () => {
+    const at = (second: number) => `2026-06-20T00:00:${String(second).padStart(2, "0")}.000Z`;
+    const queued = {
+      ...userMessage(at(30)),
+      id: TurnItemId.make("item-queued"),
+      messageId: MessageId.make("message-queued"),
+      runId: RunId.make("next-run"),
+    };
+    const feed = buildThreadFeed([
+      projected(userMessage(at(0)), 0),
+      projected(command(at(5)), 1),
+      projected(queued, 2),
+      projected({ ...command(at(35)), id: TurnItemId.make("item-command-2") }, 3),
+      projected(assistantMessage(at(50)), 4),
+    ]);
+    const latestRun = {
+      runId,
+      status: "completed" as const,
+      startedAt: at(0),
+      completedAt: at(50),
+    };
+
+    expect(
+      deriveThreadFeedPresentation(feed, latestRun, new Set()).filter(
+        (entry) => entry.type === "run-fold",
+      ),
+    ).toHaveLength(1);
   });
 
   it("keeps an active run expanded and detects failures from completed command output", () => {
