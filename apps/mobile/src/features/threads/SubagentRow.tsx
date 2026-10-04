@@ -1,5 +1,8 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { resolveSubagentMetadata } from "@t3tools/client-runtime/state/subagent-display";
+import {
+  formatSubagentUsage,
+  resolveSubagentMetadata,
+} from "@t3tools/client-runtime/state/subagent-display";
 import type { EnvironmentId, OrchestrationV2Subagent } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { View } from "react-native";
@@ -24,6 +27,7 @@ type SubagentRowSubagent = Pick<
   | "prompt"
   | "status"
   | "progress"
+  | "usage"
   | "result"
 >;
 
@@ -109,6 +113,7 @@ function SubagentMetadata(props: {
     parent ? scopeProjectRef(environmentId, parent.projectId) : null,
   );
   const childProject = useProject(child ? scopeProjectRef(environmentId, child.projectId) : null);
+  const usage = formatSubagentUsage(subagent.usage ?? null);
   const { modelLabel, workspace } = resolveSubagentMetadata({
     model: subagent.model,
     provider,
@@ -127,6 +132,7 @@ function SubagentMetadata(props: {
       <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
         {provider?.displayName ? `${provider.displayName} · ` : ""}
         {modelLabel}
+        {usage ? ` · ${usage}` : ""}
       </Text>
       {workspace.map(({ label, value }) => (
         // The row reads this label in place of the icon. collapsable keeps the
