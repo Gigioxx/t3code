@@ -6,6 +6,7 @@ import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  isTerminalSubagentStatus,
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -187,6 +188,8 @@ function liveSubagent<Agent extends RuntimeSubagent>(
     progress: null,
     result: null,
     error: null,
+    // A settled task's usage is from that run too; a follow-up reports none.
+    usage: isTerminalSubagentStatus(agent.status) ? null : agent.usage,
   };
 }
 

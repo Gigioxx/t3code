@@ -132,8 +132,12 @@ function SubagentMetadata(props: {
       <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
         {provider?.displayName ? `${provider.displayName} · ` : ""}
         {modelLabel}
-        {usage ? ` · ${usage}` : ""}
       </Text>
+      {usage ? (
+        <Text className="shrink-0 text-xs text-foreground-muted" numberOfLines={1}>
+          · {usage}
+        </Text>
+      ) : null}
       {workspace.map(({ label, value }) => (
         // The row reads this label in place of the icon. collapsable keeps the
         // view (and label) from being flattened away without making it a
