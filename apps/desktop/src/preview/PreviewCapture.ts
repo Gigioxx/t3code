@@ -1,39 +1,37 @@
-import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 const encodeString = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+let captureSequence = 0;
 const captureLocks = new WeakMap<Electron.WebContents, Semaphore.Semaphore>();
 
 // Chromium rasterizes CSS-scaled guests at their displayed size, even for capturePage.
 // Freeze only that preview while capturing unscaled pixels; never change its viewport.
-export const capturePreviewPage = (
-  tabId: string,
-  wc: Electron.WebContents,
-  rect?: Electron.Rectangle,
-) => {
+export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
   let lock = captureLocks.get(wc);
   if (!lock) {
     lock = Semaphore.makeUnsafe(1);
     captureLocks.set(wc, lock);
   }
-  const capture = Effect.tryPromise((_signal) => wc.capturePage(rect));
-  return lock.withPermit(
-    Effect.gen(function* () {
-      const host = wc.hostWebContents;
-      if (!host || host.isDestroyed()) return yield* capture;
-      const scaled = yield* Effect.tryPromise((_signal) =>
-        host.executeJavaScript(`(() => {
+  const capture = Effect.tryPromise((_signal) => wc.capturePage());
+  const unscaledCapture = capture.pipe(Effect.timeout("1 second"));
+  return lock
+    .withPermit(
+      Effect.gen(function* () {
+        const host = wc.hostWebContents;
+        if (!host || host.isDestroyed()) return yield* unscaledCapture;
+        const scaled = yield* Effect.tryPromise((_signal) =>
+          host.executeJavaScript(`(() => {
           const view = document.querySelector("webview[data-preview-tab=" + CSS.escape(${encodeString(tabId)}) + "]");
           return !!view && getComputedStyle(view).transform !== "none";
         })()`),
-      );
-      if (scaled !== true) return yield* capture;
-      const frozen = yield* Effect.tryPromise((_signal) => wc.capturePage());
-      const token = `preview-capture-${NodeCrypto.randomUUID()}`;
-      return yield* Effect.tryPromise((_signal) =>
-        host.executeJavaScript(`(async () => {
+        );
+        if (scaled !== true) return yield* unscaledCapture;
+        const frozen = yield* Effect.tryPromise((_signal) => wc.capturePage());
+        const token = `preview-capture-${++captureSequence}`;
+        return yield* Effect.tryPromise((_signal) =>
+          host.executeJavaScript(`(async () => {
             const view = document.querySelector("webview[data-preview-tab=" + CSS.escape(${encodeString(tabId)}) + "]");
             if (!view || view.getWebContentsId() !== ${wc.id}) throw new Error("Preview guest detached before capture");
             const frozen = document.createElement("img");
@@ -53,27 +51,31 @@ export const capturePreviewPage = (
             await frozen.decode();
             if (holder.isConnected && view.isConnected) holder.append(style);
           })()`),
-      ).pipe(
-        Effect.andThen(
-          Effect.tryPromise((_signal) =>
-            host.executeJavaScript(
-              "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        ).pipe(
+          Effect.andThen(
+            Effect.tryPromise((_signal) =>
+              host.executeJavaScript(
+                "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+              ),
             ),
           ),
-        ),
-        Effect.andThen(capture),
-        Effect.ensuring(
-          Effect.suspend(() =>
-            host.isDestroyed()
-              ? Effect.void
-              : Effect.tryPromise((_signal) =>
-                  host.executeJavaScript(
-                    `document.getElementById(${encodeString(token)})?.remove()`,
-                  ),
-                ).pipe(Effect.timeout("1 second"), Effect.ignore),
+          Effect.andThen(capture),
+          Effect.ensuring(
+            Effect.suspend(() =>
+              host.isDestroyed()
+                ? Effect.void
+                : Effect.tryPromise((_signal) =>
+                    host.executeJavaScript(
+                      `document.getElementById(${encodeString(token)})?.remove()`,
+                    ),
+                  ).pipe(Effect.timeout("1 second"), Effect.ignore),
+            ),
           ),
-        ),
-      );
-    }),
-  );
+        );
+      }),
+    )
+    .pipe(
+      // Bound queueing and overlay setup as well as both scaled captures.
+      Effect.timeout("5 seconds"),
+    );
 };
