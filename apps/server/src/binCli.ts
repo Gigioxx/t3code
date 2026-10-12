@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Argument, Command } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
-import * as NodeNet from "node:net";
 
 import * as NetService from "@t3tools/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
@@ -28,6 +27,7 @@ import { servicePreflightCommand } from "./cli/servicePreflight.ts";
 import { themeCommand } from "./cli/theme.ts";
 import { traceCommand } from "./cli/trace.ts";
 import { triageCommand } from "./cli/triage.ts";
+import { configureConnectionAttemptTimeout } from "./connectionAttemptTimeout.ts";
 
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
@@ -93,10 +93,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
 export const cli = makeCli();
 
 export function runCli() {
-  // Allow 1 s for non-final address attempts; Node's 250 ms default can drop slow-but-working connects.
-  NodeNet.setDefaultAutoSelectFamilyAttemptTimeout(
-    Math.max(NodeNet.getDefaultAutoSelectFamilyAttemptTimeout(), 1_000),
-  );
+  configureConnectionAttemptTimeout();
   Command.run(cli, { version: packageJson.version }).pipe(
     Effect.scoped,
     Effect.provide(layerCliRuntime),

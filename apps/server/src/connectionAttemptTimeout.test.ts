@@ -6,7 +6,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
-describe("runCli connection attempt timeout", () => {
+describe("CLI connection attempt timeout", () => {
   it.each([
     { name: "default", flags: [], nodeOptions: "", before: 250, after: 1_000, child: 250 },
     {
@@ -43,10 +43,9 @@ describe("runCli connection attempt timeout", () => {
         `
           import { getDefaultAutoSelectFamilyAttemptTimeout as getTimeout } from "node:net";
           import { execFileSync } from "node:child_process";
-          const { runCli } = await import(${JSON.stringify(new URL("./binCli.ts", import.meta.url).href)});
+          const { configureConnectionAttemptTimeout } = await import(${JSON.stringify(new URL("./connectionAttemptTimeout.ts", import.meta.url).href)});
           const before = getTimeout();
-          process.argv = [process.execPath, "t3", "--version"];
-          runCli();
+          configureConnectionAttemptTimeout();
           const after = getTimeout();
           const child = Number(execFileSync(process.execPath, [
             "--eval", "console.log(require('node:net').getDefaultAutoSelectFamilyAttemptTimeout())"
