@@ -1,4 +1,5 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   formatSubagentUsage,
   resolveSubagentMetadata,
@@ -130,7 +131,7 @@ function SubagentMetadata(props: {
         size={12}
       />
       <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
-        {provider?.displayName ? `${provider.displayName} · ` : ""}
+        {provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}
         {modelLabel}
       </Text>
       {usage ? (
