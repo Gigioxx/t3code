@@ -5,7 +5,7 @@ import type {
   UsageSummaryInput,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import type { AtomRegistry } from "effect/unstable/reactivity";
+import type { AtomRegistry } from "effect/reactivity";
 
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import type { createEnvironmentPresentationAtoms } from "./presentation.ts";
@@ -24,6 +24,27 @@ export function needsCursorKeychainAccess(
     providers?.some((provider) => provider.driver === "cursor" && provider.status === "ready") ===
       true
   );
+}
+
+/**
+ * Environments to offer the Cursor Keychain prompt in the usage summary.
+ *
+ * Any environment reading a Cursor account already reports that account's
+ * history from every machine, so the prompt only adds duplicates there. A
+ * different account on another machine stays reachable from provider settings.
+ */
+export function cursorKeychainAccessEnvironments<
+  E extends { readonly summary: UsageSummary | null; readonly needsCursorKeychainAccess: boolean },
+>(environments: readonly E[]): readonly E[] {
+  const hasCursorAccount = environments.some((environment) =>
+    environment.summary?.sources.some(
+      (source) =>
+        source.fingerprint.provider === "cursor" && source.fingerprint.hostId === "cursor.com",
+    ),
+  );
+  return hasCursorAccount
+    ? []
+    : environments.filter((environment) => environment.needsCursorKeychainAccess);
 }
 
 const limitsRefreshAfter = new Map<EnvironmentId, number>();
