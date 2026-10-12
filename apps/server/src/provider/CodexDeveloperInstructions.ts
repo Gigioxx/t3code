@@ -1,11 +1,11 @@
 import type { ProviderInteractionMode } from "@t3tools/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
-import { buildRuntimeInstructions } from "./RuntimeInstructions.ts";
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
-} from "./T3OrchestrationInstructions.ts";
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 
 const CODEX_CODE_MODE_INSTRUCTIONS = `In Codex code mode, if the T3 tools are not listed, call \`tools.mcp__t3_code__orchestrator_capabilities({})\` before reporting that the capability is absent.`;
 
