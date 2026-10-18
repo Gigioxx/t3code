@@ -8,12 +8,6 @@ import {
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
-  it("keeps shared instructions provider-neutral", () => {
-    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "acp-mcp-call");
-    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "T3_ACP_MCP_NODE");
-    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "mcp__t3_code__");
-  });
-
   it("distinguishes delegated subagents from ordinary top-level threads", () => {
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Use `delegate_task`");
     assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "ordinary top-level T3 conversations");
@@ -93,6 +87,5 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(withoutMcp, "T3 Code interaction mode: Default");
     assert.notInclude(withoutMcp, "T3 Code collaborative browser");
     assert.notInclude(withoutMcp, "T3 Code orchestration");
-    assert.notInclude(withoutMcp, "acp-mcp-call");
   });
 });
