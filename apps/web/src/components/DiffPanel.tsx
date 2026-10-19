@@ -592,6 +592,19 @@ export default function DiffPanel({
     if (!scrollSession.initialized) return;
     if (scrollSession.pending) {
       const top = resolveDiffScrollAnchorTop(viewer, scrollSession.pending);
+      if (top === null) {
+        const fallback: DiffScrollAnchor = {
+          type: "item",
+          id: scrollSession.pending.id,
+          align: "start",
+          offset: 0,
+        };
+        scrollSession.pending = null;
+        scrollSession.state.scrollAnchor = fallback;
+        viewer.scrollTo({ ...fallback, behavior: "instant" });
+        scrollSession.state.scrollTop = viewer.getScrollTop();
+        return;
+      }
       if (top === undefined || viewer.getHeight() === 0) return;
       const scrollHeight =
         viewer.getScrollHeight() + (viewer.getFooterElement()?.getBoundingClientRect().height ?? 0);

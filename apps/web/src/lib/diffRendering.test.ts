@@ -16,17 +16,23 @@ import {
 } from "./diffRendering";
 
 it("keeps a visible diff line and its offset through remounts with different virtual heights", () => {
-  const patch = getRenderablePatch(
-    [
-      "diff --git a/file-19.ts b/file-19.ts",
-      "--- /dev/null",
-      "+++ b/file-19.ts",
-      "@@ -0,0 +1,800 @@",
-      ...Array.from({ length: 800 }, (_, index) => `+const line${index} = "${"x".repeat(100)}";`),
-    ].join("\n"),
-  );
-  if (patch?.kind !== "files") throw new Error("Expected a file diff");
-  const fileDiff = patch.files[0]!;
+  const createFileDiff = (lineCount: number) => {
+    const patch = getRenderablePatch(
+      [
+        "diff --git a/file-19.ts b/file-19.ts",
+        "--- /dev/null",
+        "+++ b/file-19.ts",
+        `@@ -0,0 +1,${lineCount} @@`,
+        ...Array.from(
+          { length: lineCount },
+          (_, index) => `+const line${index} = "${"x".repeat(100)}";`,
+        ),
+      ].join("\n"),
+    );
+    if (patch?.kind !== "files") throw new Error("Expected a file diff");
+    return patch.files[0]!;
+  };
+  let fileDiff = createFileDiff(800);
   const createInstance = (lineHeight: number) =>
     new VirtualizedFileDiff({ diffStyle: "split", overflow: "wrap" }, new Virtualizer(), {
       lineHeight,
@@ -41,6 +47,8 @@ it("keeps a visible diff line and its offset through remounts with different vir
     getScrollTop: () => scrollTop,
     getHeight: () => 600,
     getTopForItem: (id: string) => (id === "file-19.ts" ? fileTop : undefined),
+    getItem: (id: string) =>
+      id === "file-19.ts" ? { type: "diff" as const, fileDiff } : undefined,
     getRenderedItems: () => [{ id: "file-19.ts", instance }],
   };
   const saved = captureDiffScrollAnchor(viewer)!;
@@ -60,6 +68,26 @@ it("keeps a visible diff line and its offset through remounts with different vir
     scrollTop = resolveDiffScrollAnchorTop(viewer, saved)!;
     expect(captureDiffScrollAnchor(viewer)).toEqual(saved);
   }
+  const unrenderedViewer = { ...viewer, getRenderedItems: () => [] };
+  expect(resolveDiffScrollAnchorTop(unrenderedViewer, saved)).toBeUndefined();
+  fileDiff = createFileDiff(100);
+  instance = createInstance(20);
+  instance.updateCodeViewLayout(fileDiff, fileTop);
+  expect(instance.getLinePosition(432, "additions")).toBeUndefined();
+  expect(resolveDiffScrollAnchorTop(viewer, saved)).toBeNull();
+  expect(resolveDiffScrollAnchorTop(unrenderedViewer, saved)).toBeNull();
+  scrollTop = resolveDiffScrollAnchorTop(viewer, {
+    type: "item",
+    id: saved.id,
+    align: "start",
+    offset: 0,
+  })!;
+  expect(captureDiffScrollAnchor(viewer)).toEqual({
+    type: "item",
+    id: saved.id,
+    align: "start",
+    offset: 0,
+  });
 });
 
 describe("buildPatchCacheKey", () => {

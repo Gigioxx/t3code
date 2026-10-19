@@ -18,6 +18,7 @@ interface DiffScrollViewer {
   getScrollTop(): number;
   getHeight(): number;
   getTopForItem(id: string): number | undefined;
+  getItem(id: string): { type: "diff"; fileDiff: FileDiffMetadata } | { type: "file" } | undefined;
   getRenderedItems(): ReadonlyArray<{
     id: string;
     instance: Pick<
@@ -54,13 +55,27 @@ export function captureDiffScrollAnchor(viewer: DiffScrollViewer): DiffScrollAnc
 export function resolveDiffScrollAnchorTop(
   viewer: DiffScrollViewer,
   anchor: DiffScrollAnchor,
-): number | undefined {
+): number | null | undefined {
   const top = viewer.getTopForItem(anchor.id);
   if (top === undefined) return;
   if (anchor.type === "item") return top - anchor.offset;
   const instance = viewer.getRenderedItems().find(({ id }) => id === anchor.id)?.instance;
   const line = instance?.getLinePosition(anchor.lineNumber, anchor.side);
   if (line) return top + line.top - DIFF_HEADER_HEIGHT - anchor.offset;
+  // A rendered file without the line is stale; an unrendered file may still need measuring.
+  if (instance) return null;
+  const item = viewer.getItem(anchor.id);
+  if (item?.type === "diff") {
+    const { fileDiff } = item;
+    const lastHunk = fileDiff.hunks.at(-1);
+    const deletions = anchor.side === "deletions";
+    const start = deletions ? lastHunk?.deletionStart : lastHunk?.additionStart;
+    const count = deletions ? lastHunk?.deletionCount : lastHunk?.additionCount;
+    const lastLine = fileDiff.isPartial
+      ? (start ?? 1) + (count ?? 0) - 1
+      : (deletions ? fileDiff.deletionLines : fileDiff.additionLines).length;
+    if (anchor.lineNumber < 1 || anchor.lineNumber > lastLine) return null;
+  }
 }
 
 const DIFF_THEME_NAMES = {
