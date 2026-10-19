@@ -32,6 +32,8 @@ export const withUnscaledPreviewCapture = <A, E, R>(
         if (!host || host.isDestroyed()) return yield* unscaledCapture;
         const scaled = yield* Effect.tryPromise((_signal) =>
           host.executeJavaScript(`(() => {
+          // Hidden hosts suspend animation frames, so overlay setup cannot finish.
+          if (document.visibilityState !== "visible") return false;
           const view = document.querySelector("webview[${tabAttribute}=" + CSS.escape(${encodeString(tabId)}) + "]");
           return !!view && view.getWebContentsId() === ${wc.id} && getComputedStyle(view).transform !== "none";
         })()`),
