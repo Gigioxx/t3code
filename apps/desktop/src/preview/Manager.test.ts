@@ -1,3 +1,5 @@
+import * as NodeVM from "node:vm";
+
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER } from "@t3tools/contracts";
@@ -29,6 +31,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewManager from "./Manager.ts";
+import { capturePreviewPage } from "./PreviewCapture.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
 
 describe("fitPictureInPictureContentSize", () => {
@@ -409,6 +412,125 @@ const makeTestPreviewWebContents = (
     },
     capturePage,
   } as unknown as TestPreviewWebContents;
+};
+
+// Execute the host scripts at the Electron boundary. Pixel detail models Chromium's
+// scaled compositor surface; this fixture does not prove native rasterization.
+const makeScaledCaptureGuest = (scaled = true) => {
+  const roots: HostElement[] = [];
+  const timers = new Map<number, { callback: () => void; delay: number }>();
+  let timerId = 0;
+  let decode = () => Promise.resolve();
+  let hostFailure: "reject" | "stall" | undefined;
+  class HostElement {
+    id = "";
+    src = "";
+    alt = "";
+    className = "";
+    textContent = "";
+    dataset = { previewTab: "tab_1" };
+    style = { cssText: "", display: "", pointerEvents: "", maxWidth: "" };
+    children: HostElement[] = [];
+    parent: HostElement | undefined;
+    readonly tagName: string;
+    constructor(tagName: string) {
+      this.tagName = tagName;
+    }
+    get isConnected(): boolean {
+      return roots.includes(this) || (this.parent?.isConnected ?? false);
+    }
+    getWebContentsId() {
+      return 42;
+    }
+    append(...children: HostElement[]) {
+      for (const child of children) {
+        child.parent = this;
+        this.children.push(child);
+      }
+    }
+    after(element: HostElement) {
+      roots.splice(roots.indexOf(this) + 1, 0, element);
+    }
+    remove() {
+      const siblings = this.parent?.children ?? roots;
+      const index = siblings.indexOf(this);
+      if (index !== -1) siblings.splice(index, 1);
+      this.parent = undefined;
+    }
+    decode() {
+      return decode();
+    }
+  }
+  const view = new HostElement("webview");
+  view.style.cssText = "width: 1280px; height: 720px; transform: scale(0.5)";
+  roots.push(view);
+  const elements = (): HostElement[] => roots.flatMap((root) => [root, ...root.children]);
+  const isUnscaled = () =>
+    !scaled ||
+    elements().some(
+      (element) => element.tagName === "style" && /transform:\s*none/.test(element.textContent),
+    );
+  const host = makeTestHostWebContents();
+  const context = {
+    document: {
+      querySelector: () => view,
+      createElement: (tag: string) => new HostElement(tag),
+      getElementById: (id: string) => elements().find((element) => element.id === id),
+    },
+    CSS: { escape: (value: string) => value },
+    getComputedStyle: () => ({ transform: isUnscaled() ? "none" : "matrix(0.5,0,0,0.5,0,0)" }),
+    requestAnimationFrame: (callback: () => void) => callback(),
+    setTimeout: (callback: () => void, delay: number) => {
+      const id = ++timerId;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout: (id: number) => timers.delete(id),
+  };
+  host.executeJavaScript.mockImplementation(async (script: string) => {
+    if (hostFailure === "reject") throw new Error("Host IPC unavailable");
+    if (hostFailure === "stall") return new Promise(() => {});
+    return NodeVM.runInNewContext(script, context);
+  });
+  const image = (detail: string) => ({
+    getSize: () => ({ width: 1280, height: 720 }),
+    toPNG: () => Buffer.from(detail),
+    toJPEG: () => Buffer.from(detail),
+    toDataURL: () => `data:image/png;base64,${Buffer.from(detail).toString("base64")}`,
+  });
+  const capturePage = vi.fn(async () => image(isUnscaled() ? "viewport-detail" : "scaled-detail"));
+  const wc = makeTestPreviewWebContents(capturePage, 42, host);
+  return {
+    wc,
+    host,
+    capturePage,
+    image,
+    isUnscaled,
+    setDecode: (next: typeof decode) => {
+      decode = next;
+    },
+    loseHostIpc: (failure: typeof hostFailure) => {
+      hostFailure = failure;
+    },
+    expireHostTimers: () => {
+      const pending = [...timers.values()];
+      timers.clear();
+      for (const { callback, delay } of pending) {
+        if (delay <= 10_000) callback();
+      }
+    },
+    expectFrozen: () => {
+      const frozen = elements().find((element) => element.tagName === "img");
+      expect(frozen?.src).toBe(image("scaled-detail").toDataURL());
+      expect(frozen?.style.cssText).toBe(view.style.cssText);
+      expect(view.style.cssText).toBe("width: 1280px; height: 720px; transform: scale(0.5)");
+    },
+    expectRestored: () => {
+      expect(roots).toEqual([view]);
+      expect(view.style.cssText).toBe("width: 1280px; height: 720px; transform: scale(0.5)");
+      expect(wc.getZoomFactor()).toBe(1);
+    },
+  };
 };
 
 const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"]) =>
@@ -2971,42 +3093,131 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("allows scaled capture setup to exceed one second", () =>
+  effectIt.effect("captures viewport detail after slow scaled setup and restores the preview", () =>
     withManager((manager) =>
       Effect.gen(function* () {
-        const image = {
-          toPNG: () => Buffer.from("scaled-png"),
-          toJPEG: () => Buffer.from("scaled-jpeg"),
-          toDataURL: () => "data:image/png;base64,cG5n",
-          getSize: () => ({ width: 100, height: 80 }),
-        };
+        const guest = makeScaledCaptureGuest();
         const pending = Promise.withResolvers<void>();
         const setupStarted = Promise.withResolvers<void>();
-        const host = makeTestHostWebContents();
-        host.executeJavaScript.mockImplementation(async (expression: string) => {
-          if (expression.includes("getComputedStyle")) return true;
-          if (expression.includes("frozen.decode")) {
-            setupStarted.resolve();
-            await pending.promise;
-          }
-          return undefined;
+        guest.setDecode(() => {
+          setupStarted.resolve();
+          return pending.promise;
         });
-        const capturePage = vi.fn(async () => image);
-        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage, 42, host));
+        fromId.mockReturnValue(guest.wc);
         yield* manager.createTab("tab_1");
         yield* manager.registerWebview("tab_1", 42);
         const fiber = yield* manager.captureScreenshot("tab_1").pipe(Effect.forkChild);
-        yield* Effect.promise(() => setupStarted.promise);
-        yield* TestClock.adjust("2 seconds");
-        expect(fiber.pollUnsafe()).toBeUndefined();
+        yield* Effect.raceFirst(
+          Effect.promise((_signal) => setupStarted.promise),
+          Fiber.await(fiber),
+        );
+        if (fiber.pollUnsafe() === undefined) {
+          yield* TestClock.adjust("2 seconds");
+          expect(fiber.pollUnsafe()).toBeUndefined();
+        }
         pending.resolve();
         const artifact = yield* Fiber.join(fiber);
-        expect(capturePage).toHaveBeenCalledTimes(2);
-        expect(writeFile).toHaveBeenCalledWith(artifact.path, image.toPNG());
-        expect(host.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("?.remove()"));
+        expect(writeFile).toHaveBeenCalledWith(artifact.path, Buffer.from("viewport-detail"));
+        guest.expectRestored();
       }),
     ),
   );
+
+  effectIt.effect("serializes concurrent captures of the same scaled guest", () =>
+    Effect.gen(function* () {
+      const guest = makeScaledCaptureGuest();
+      const pending = Promise.withResolvers<void>();
+      const setupStarted = Promise.withResolvers<void>();
+      guest.setDecode(() => {
+        setupStarted.resolve();
+        return pending.promise;
+      });
+      const first = yield* capturePreviewPage("tab_1", guest.wc).pipe(Effect.forkChild);
+      yield* Effect.promise((_signal) => setupStarted.promise);
+      const second = yield* capturePreviewPage("tab_1", guest.wc).pipe(Effect.forkChild);
+      yield* TestClock.adjust(0);
+      expect(guest.capturePage).toHaveBeenCalledOnce();
+      pending.resolve();
+      expect((yield* Fiber.join(first)).toPNG()).toEqual(Buffer.from("viewport-detail"));
+      expect((yield* Fiber.join(second)).toPNG()).toEqual(Buffer.from("viewport-detail"));
+      guest.expectRestored();
+    }),
+  );
+
+  for (const outcome of ["capture error", "interruption"] as const) {
+    effectIt.effect(`restores the scaled preview after ${outcome}`, () =>
+      Effect.gen(function* () {
+        const guest = makeScaledCaptureGuest();
+        const capturing = Promise.withResolvers<void>();
+        guest.capturePage.mockImplementation(async () => {
+          if (!guest.isUnscaled()) return guest.image("scaled-detail");
+          guest.expectFrozen();
+          capturing.resolve();
+          if (outcome === "capture error") throw new Error("Capture failed");
+          return new Promise(() => {});
+        });
+        const pendingDecode = Promise.withResolvers<void>();
+        if (outcome === "interruption") {
+          guest.setDecode(() => {
+            capturing.resolve();
+            return pendingDecode.promise;
+          });
+        }
+        const fiber = yield* capturePreviewPage("tab_1", guest.wc).pipe(Effect.forkChild);
+        yield* Effect.promise(() => capturing.promise);
+        if (outcome === "interruption") yield* Fiber.interrupt(fiber);
+        expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
+        guest.expectRestored();
+        pendingDecode.resolve();
+        yield* TestClock.adjust(0);
+        guest.expectRestored();
+      }),
+    );
+  }
+
+  for (const failure of ["reject", "stall"] as const) {
+    effectIt.effect(`restores the scaled preview when cleanup IPC will ${failure}`, () =>
+      Effect.gen(function* () {
+        const guest = makeScaledCaptureGuest();
+        const captured = Promise.withResolvers<void>();
+        guest.capturePage.mockImplementation(async () => {
+          if (!guest.isUnscaled()) return guest.image("scaled-detail");
+          guest.loseHostIpc(failure);
+          captured.resolve();
+          return guest.image("viewport-detail");
+        });
+        const fiber = yield* capturePreviewPage("tab_1", guest.wc).pipe(Effect.forkChild);
+        yield* Effect.promise(() => captured.promise);
+        yield* TestClock.adjust("6 seconds");
+        yield* Fiber.await(fiber);
+        // The renderer remains alive even when main can no longer send cleanup.
+        expect(guest.host.isDestroyed()).toBe(false);
+        guest.expireHostTimers();
+        guest.expectRestored();
+      }),
+    );
+  }
+
+  for (const scaled of [false, true]) {
+    effectIt.effect(`bounds a stalled ${scaled ? "scaled" : "unscaled"} capture`, () =>
+      Effect.gen(function* () {
+        const guest = makeScaledCaptureGuest(scaled);
+        const capturing = Promise.withResolvers<void>();
+        guest.capturePage.mockImplementation(async () => {
+          if (scaled && !guest.isUnscaled()) return guest.image("scaled-detail");
+          capturing.resolve();
+          return new Promise(() => {});
+        });
+        const fiber = yield* capturePreviewPage("tab_1", guest.wc).pipe(Effect.forkChild);
+        yield* Effect.promise(() => capturing.promise);
+        yield* TestClock.adjust(scaled ? 4_999 : 999);
+        expect(fiber.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust(1);
+        expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
+        guest.expectRestored();
+      }),
+    );
+  }
 
   effectIt.effect("discards a screenshot that resolves after its guest is replaced", () =>
     withManager((manager) =>
@@ -4367,7 +4578,7 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("crops the picked area out of a full-page capture at device scale", () =>
+  effectIt.effect("crops viewport detail from a scaled guest at device scale", () =>
     withManager((manager) =>
       Effect.gen(function* () {
         let onPicked: ((event: unknown, ...args: unknown[]) => void) | undefined;
@@ -4375,12 +4586,19 @@ describe("PreviewManager", () => {
           getSize: () => ({ width: rect.width, height: rect.height }),
           toDataURL: () => "data:image/png;base64,cropped",
         }));
-        const capturePage = vi.fn(async () => ({
-          getSize: () => ({ width: 2000, height: 1200 }),
-          crop,
-        }));
+        const guest = makeScaledCaptureGuest();
+        const capturePage = guest.capturePage;
+        capturePage.mockImplementation(async () => {
+          const image = guest.image(guest.isUnscaled() ? "viewport-detail" : "scaled-detail");
+          return {
+            ...image,
+            crop: (rect: Electron.Rectangle) => {
+              return { ...crop(rect), toDataURL: image.toDataURL };
+            },
+          };
+        });
         fromId.mockReturnValue(
-          Object.assign(makeTestPreviewWebContents(capturePage as never), {
+          Object.assign(guest.wc, {
             isFocused: () => true,
             once: vi.fn(),
             ipc: {
@@ -4419,9 +4637,10 @@ describe("PreviewManager", () => {
         const result = yield* Fiber.join(pick);
         expect(capturePage).toHaveBeenCalledWith();
         expect(crop).toHaveBeenCalledWith({ x: 10, y: 12, width: 40, height: 60 });
+        guest.expectRestored();
         expect(result?.screenshotFailed).toBeUndefined();
         expect(result?.annotation.screenshot).toEqual({
-          dataUrl: "data:image/png;base64,cropped",
+          dataUrl: "data:image/png;base64,dmlld3BvcnQtZGV0YWls",
           width: 40,
           height: 60,
           cropRect: { x: 5, y: 6, width: 20, height: 30 },
