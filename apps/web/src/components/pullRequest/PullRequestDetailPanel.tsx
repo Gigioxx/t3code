@@ -827,7 +827,7 @@ export function PullRequestDetailPanel({
     nativeStackQuery.refresh();
   };
   const [refreshToken, setRefreshToken] = useState(0);
-  const codeRefreshToken = refreshToken + (turnRefresh ?? 0);
+  const backgroundRefreshToken = JSON.stringify([turnRefresh, coreDetail?.updatedAt]);
   const [activityRevision, setActivityRevision] = useState<{
     readonly key: string;
     readonly updatedAt: string;
@@ -846,7 +846,6 @@ export function PullRequestDetailPanel({
       // mutation's activity refresh can leave SWR displaying its previous value.
       setActivityRevision(next);
       setActivityRevalidations((count) => count + 1);
-      setRefreshToken((token) => token + 1);
     }
   }
   const revalidateActivity = useEffectEvent(() => activityQuery.refresh());
@@ -2874,7 +2873,8 @@ export function PullRequestDetailPanel({
                     fixFindingLabel={handoffLabels.fixFinding}
                     {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}
                     onRefresh={refreshDetail}
-                    refreshToken={codeRefreshToken}
+                    refreshToken={refreshToken}
+                    backgroundRefreshToken={backgroundRefreshToken}
                     revealRequest={codeRevealRequest}
                   />
                 </Suspense>
