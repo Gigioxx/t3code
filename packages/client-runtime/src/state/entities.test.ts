@@ -28,7 +28,7 @@ import { v2Projection, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { deriveLatestThreadRun, deriveThreadRuntime } from "./threadExecution.ts";
 import { isThreadWorking } from "./threadInbox.ts";
 import { derivePendingThreadRequests } from "./threadRequests.ts";
-import { canSnooze } from "./threadSettled.ts";
+import { canSnooze, effectiveSnoozed } from "./threadSettled.ts";
 
 const environmentId = EnvironmentId.make("environment-v2");
 
@@ -117,6 +117,8 @@ describe("V2 client presentation", () => {
     const runId = RunId.make("run-async-question");
     const running = {
       ...v2ThreadShell,
+      snoozedAt: DateTime.makeUnsafe("2026-06-19T23:59:00.000Z"),
+      snoozedUntil: DateTime.makeUnsafe("2026-06-20T01:00:00.000Z"),
       latestRunId: runId,
       activeRunId: runId,
       status: "running" as const,
@@ -139,6 +141,7 @@ describe("V2 client presentation", () => {
     });
     expect(completed.hasPendingUserInput).toBe(true);
     expect(isThreadWorking(completed)).toBe(false);
+    expect(effectiveSnoozed(active, { now: "2026-06-20T00:05:00.000Z" })).toBe(false);
   });
 
   it("keeps blocking and legacy questions out of Working", () => {
