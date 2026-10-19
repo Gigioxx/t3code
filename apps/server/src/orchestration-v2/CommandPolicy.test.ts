@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  MessageId,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ThreadProjection,
   ProviderInstanceId,
@@ -13,14 +14,15 @@ import {
 import * as Effect from "effect/Effect";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import { CursorProviderCapabilitiesV2 } from "./Adapters/CursorAdapterV2.ts";
-import { GrokProviderCapabilitiesV2 } from "./Adapters/GrokAdapterV2.ts";
+import { CursorProviderCapabilitiesV2 } from "@t3tools/provider-cursor/testing";
+import { GrokProviderCapabilitiesV2 } from "@t3tools/provider-grok/testing";
 import * as CommandPolicy from "./CommandPolicy.ts";
 
 const commandId = CommandId.make("command-policy-test");
 const threadId = ThreadId.make("command-policy-thread");
 const activeRunId = RunId.make("command-policy-active-run");
 const activeAttemptId = RunAttemptId.make("command-policy-active-attempt");
+const userMessageId = MessageId.make("command-policy-user-message");
 
 const baseCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
 
@@ -39,7 +41,16 @@ function dispatchProjection(
     runs:
       sessionCapabilities === undefined
         ? []
-        : [{ id: activeRunId, status: "running", providerThreadId, activeAttemptId }],
+        : [
+            {
+              id: activeRunId,
+              status: "running",
+              providerThreadId,
+              activeAttemptId,
+              userMessageId,
+            },
+          ],
+    messages: [{ id: userMessageId, text: "first", attachments: [] }],
     providerThreads:
       sessionCapabilities === undefined ? [] : [{ id: providerThreadId, providerSessionId }],
     providerSessions:
@@ -176,6 +187,39 @@ it("targets the latest active run for explicit steer and restart intent", () => 
   );
 });
 
+it.each(["/compact", " /LOGOUT "])("queues a steer sent while %s runs", (text) => {
+  const projection = dispatchProjection(baseCapabilities);
+  const maintenance = {
+    ...projection,
+    messages: [{ id: userMessageId, text, attachments: [] }],
+  } as unknown as OrchestrationV2ThreadProjection;
+  for (const deliveryIntent of ["auto", "steer"] as const) {
+    assert.deepEqual(
+      CommandPolicy.resolveMessageDispatchIntent(
+        maintenance,
+        { type: "start_immediately" },
+        deliveryIntent,
+      ),
+      { type: "queue_after_active" },
+    );
+  }
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(maintenance, {
+      type: "steer_active",
+      targetRunId: activeRunId,
+    }),
+    { type: "queue_after_active" },
+  );
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(
+      maintenance,
+      { type: "start_immediately" },
+      "restart",
+    ),
+    { type: "restart_active", targetRunId: activeRunId },
+  );
+});
+
 const layer = it.layer(CommandPolicy.layer);
 
 layer("CommandPolicyV2", (it) => {
@@ -270,7 +314,6 @@ layer("CommandPolicyV2", (it) => {
               readonly detail: string;
             };
       }> = [
-        // Ordinary steering prefers direct active steering whenever available.
         {
           forceRestart: false,
           supportsActiveSteering: true,
@@ -299,8 +342,6 @@ layer("CommandPolicyV2", (it) => {
           supportsSteeringByInterruptRestart: true,
           expected: { type: "policy", value: "active_steering" },
         },
-        // Ordinary steering falls back to interrupt-and-restart, then to a
-        // typed error naming the capability that is actually missing.
         {
           forceRestart: false,
           supportsActiveSteering: false,
@@ -333,9 +374,6 @@ layer("CommandPolicyV2", (it) => {
           supportsSteeringByInterruptRestart: false,
           expected: { type: "error", capability: "active_steering", detail: fallbackDetail },
         },
-        // A forced restart skips direct steering and only succeeds via
-        // interrupt-and-restart; every other combination must report that
-        // capability instead of claiming live steering is unsupported.
         {
           forceRestart: true,
           supportsActiveSteering: true,
