@@ -422,7 +422,10 @@ const makeTestPreviewWebContents = (
 
 // Execute the host scripts at the Electron boundary. Pixel detail models Chromium's
 // scaled compositor surface; this fixture does not prove native rasterization.
-const makeScaledCaptureGuest = (scaled = true) => {
+const makeScaledCaptureGuest = (
+  scaled = true,
+  visibilityState: DocumentVisibilityState = "visible",
+) => {
   const roots: HostElement[] = [];
   const timers = new Map<number, { callback: () => void; delay: number }>();
   let timerId = 0;
@@ -480,6 +483,7 @@ const makeScaledCaptureGuest = (scaled = true) => {
   const host = makeTestHostWebContents();
   const context = {
     document: {
+      visibilityState,
       querySelector: (selector: string) => {
         const match = /^webview\[data-preview-(tab|server-tab)=["']?([^"'\]]+)["']?\]$/.exec(
           selector,
@@ -492,7 +496,9 @@ const makeScaledCaptureGuest = (scaled = true) => {
     },
     CSS: { escape: (value: string) => value },
     getComputedStyle: () => ({ transform: isUnscaled() ? "none" : "matrix(0.5,0,0,0.5,0,0)" }),
-    requestAnimationFrame: (callback: () => void) => callback(),
+    requestAnimationFrame: (callback: () => void) => {
+      if (visibilityState === "visible") callback();
+    },
     setTimeout: (callback: () => void, delay: number) => {
       const id = ++timerId;
       timers.set(id, { callback, delay });
@@ -3192,6 +3198,66 @@ describe("PreviewManager", () => {
       expect(sendCommand.mock.calls).toEqual([["Page.captureScreenshot", params]]);
       guest.expectRestored();
     }).pipe(Effect.provide(managerLayer()), Effect.scoped),
+  );
+
+  effectIt.effect(
+    "captures PNG through the server relay while the hidden host suspends animation frames",
+    () =>
+      Effect.gen(function* () {
+        const guest = makeScaledCaptureGuest(true, "hidden");
+        const serverTab = { threadId: "thread-1", tabId: "server-tab-1" };
+        const params = {
+          format: "png",
+          clip: { x: 13, y: 29, width: 1280, height: 720, scale: 0.5 },
+        };
+        const data = guest.image("scaled-detail").toPNG().toString("base64");
+        const sendCommand = vi.fn(async (method: string) => {
+          if (method !== "Page.captureScreenshot") return {};
+          guest.expectRestored();
+          return { data };
+        });
+        Object.assign(guest.wc.debugger, { sendCommand });
+        Object.assign(guest.wc, { isDevToolsOpened: () => false, getUserAgent: () => "Electron" });
+        fromId.mockReturnValue(guest.wc);
+        const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+        const lines = yield* Queue.unbounded<DesktopBrowserEvent>();
+        yield* host.events.pipe(
+          Stream.runForEach((line) =>
+            Queue.offer(lines, decodeDesktopBrowserEvent(new TextDecoder().decode(line))),
+          ),
+          Effect.forkScoped,
+        );
+        const manager = yield* PreviewManager.PreviewManager;
+        yield* manager.createTab("tab_1", { serverTab });
+        yield* manager.registerWebview("tab_1", 42);
+        expect(yield* Queue.take(lines)).toEqual({ type: "attached", ...serverTab });
+        sendCommand.mockClear();
+
+        yield* host.handleCommandLine(
+          JSON.stringify({
+            type: "cdp",
+            ...serverTab,
+            message: JSON.stringify({
+              id: 1,
+              method: "Page.captureScreenshot",
+              params,
+              sessionId: "t3-preview-page",
+            }),
+          }),
+        );
+        yield* TestClock.adjust("5 seconds");
+        const reply = yield* Queue.take(lines);
+        expect(reply).toMatchObject({ type: "cdp", ...serverTab });
+        if (reply.type !== "cdp") throw new Error("Expected a CDP screenshot reply");
+        expect(decodeJson(reply.message)).toEqual({
+          id: 1,
+          result: { data },
+          sessionId: "t3-preview-page",
+        });
+        expect(sendCommand.mock.calls).toEqual([["Page.captureScreenshot", params]]);
+        expect(guest.capturePage).not.toHaveBeenCalled();
+        guest.expectRestored();
+      }).pipe(Effect.provide(managerLayer()), Effect.scoped),
   );
 
   effectIt.effect.each(["reject", "stall"] as const)(
