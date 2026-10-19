@@ -241,13 +241,6 @@ describe("pools", () => {
       ],
       ["codex", "ChatGPT Pro 20x Subscription", "Unknown plan", "ChatGPT Pro 5x Subscription", 50],
       ["codex", "ChatGPT Pro 20x Subscription", undefined, "ChatGPT Pro 5x Subscription", 50],
-      [
-        "claudeAgent",
-        "Claude Max 20x Subscription",
-        "Claude Subscription",
-        "Claude Max 5x Subscription",
-        50,
-      ],
     ] as const) {
       const observation = (
         id: string,
@@ -288,6 +281,80 @@ describe("pools", () => {
         const session = collectLimitPools(merged, now)[0]?.windows[0];
         expect.soft(merged, context).toHaveLength(2);
         expect.soft(session?.remainingPercent, context).toBe(remaining);
+      }
+    }
+
+    for (const [nativeCheckedAt, hubCheckedAt] of [
+      [checkedAt, "2026-09-03T11:30:00.000Z"],
+      ["2026-09-03T11:30:00.000Z", checkedAt],
+    ] as const) {
+      const reports = new Map([
+        [
+          EnvironmentId.make("env-a"),
+          {
+            ...laptop,
+            serverConfig: {
+              providers: [
+                {
+                  ...native,
+                  auth: { ...native.auth, label: "Claude Max 20x Subscription" },
+                  usageLimits: {
+                    checkedAt: nativeCheckedAt,
+                    windows: [{ ...window, usedPercent: 0 }],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        [
+          EnvironmentId.make("env-b"),
+          {
+            entry: { target: { label: "Desktop" } },
+            serverConfig: {
+              providers: [
+                provider({
+                  driver: claude,
+                  instanceId: ProviderInstanceId.make("peer"),
+                  auth: {
+                    status: "authenticated",
+                    email: "peer@example.com",
+                    label: "Claude Max 5x Subscription",
+                  },
+                  usageLimits: { checkedAt, windows: [{ ...window, usedPercent: 100 }] },
+                }),
+              ],
+              usageLimitSources: [
+                {
+                  ...source,
+                  checkedAt: hubCheckedAt,
+                  accounts: [
+                    {
+                      id: "claude-same@example.com.json",
+                      driver: claude,
+                      email: "same@example.com",
+                      plan: "Claude Subscription",
+                      usageLimits: {
+                        checkedAt: hubCheckedAt,
+                        windows: [{ ...window, usedPercent: 0 }],
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      ]);
+      for (const ordered of [reports, new Map([...reports].toReversed())]) {
+        const context = `native ${nativeCheckedAt}, hub ${hubCheckedAt}, ${[...ordered.keys()].join(", ")}`;
+        const merged = collectLimitAccounts(ordered);
+        const session = collectLimitPools(merged, now)[0]?.windows[0];
+        expect.soft(merged, context).toHaveLength(2);
+        expect
+          .soft(merged.find((account) => account.email === native.auth.email)?.plan, context)
+          .toBe("Claude Max 20x Subscription");
+        expect.soft(session?.remainingPercent, context).toBe(80);
       }
     }
   });
