@@ -123,7 +123,7 @@ interface CollapsedDiffFilesState {
 
 interface DiffScrollSession {
   viewerKey: string;
-  restoreFileCount: number;
+  restoreFilePaths: ReadonlySet<string>;
   initialized: boolean;
   pending: { fileKey: string; offset: number } | null;
   state: DiffPanelViewState;
@@ -467,6 +467,7 @@ export default function DiffPanel({
     fileStates,
     retry,
     requestFile,
+    requestFiles,
     readyFilePaths,
     renderableFiles,
     settledFileCount,
@@ -555,12 +556,12 @@ export default function DiffPanel({
       : undefined;
     const session: DiffScrollSession = {
       viewerKey,
-      restoreFileCount: saved?.loadedFileCount ?? 0,
+      restoreFilePaths: new Set(saved?.loadedFilePaths),
       initialized: false,
       pending: null,
       state: {
         scrollTop: saved?.scrollTop ?? 0,
-        loadedFileCount: saved?.loadedFileCount ?? 0,
+        loadedFilePaths: saved?.loadedFilePaths ?? [],
         handledReveal: saved?.handledReveal ?? null,
       },
     };
@@ -584,11 +585,12 @@ export default function DiffPanel({
     if (scrollSession.pending) {
       const top = viewer.getTopForItem(scrollSession.pending.fileKey);
       if (top === undefined || viewer.getHeight() === 0) return;
-      if (top - scrollSession.pending.offset > 0 && viewer.getScrollHeight() <= viewer.getHeight())
-        return;
+      const scrollHeight =
+        viewer.getScrollHeight() + (viewer.getFooterElement()?.getBoundingClientRect().height ?? 0);
+      if (top - scrollSession.pending.offset > 0 && scrollHeight <= viewer.getHeight()) return;
       const target = Math.max(
         0,
-        Math.min(top - scrollSession.pending.offset, viewer.getScrollHeight() - viewer.getHeight()),
+        Math.min(top - scrollSession.pending.offset, scrollHeight - viewer.getHeight()),
       );
       if (Math.abs(scrollTop - target) > 1) return;
       scrollSession.pending = null;
@@ -596,23 +598,25 @@ export default function DiffPanel({
     scrollSession.state.scrollTop = scrollTop;
   };
 
-  useEffect(() => {
+  const cancelDiffScrollRestore = () => {
     const scrollSession = scrollSessionRef.current;
     if (!scrollSession || scrollSession.viewerKey !== viewerKey) return;
+    scrollSession.initialized = true;
+    scrollSession.pending = null;
     const viewer = codeView?.getInstance();
-    const container = viewer?.getContainerElement();
-    if (!viewer || !container) return;
-    const cancelRestore = () => {
-      scrollSession.initialized = true;
-      scrollSession.pending = null;
-      scrollSession.state.scrollTop = viewer.getScrollTop();
-    };
+    if (viewer) scrollSession.state.scrollTop = viewer.getScrollTop();
+  };
+
+  useEffect(() => {
+    const container = codeView?.getInstance()?.getContainerElement();
+    if (!container) return;
     const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
-    for (const event of events) container.addEventListener(event, cancelRestore, { passive: true });
+    for (const event of events)
+      container.addEventListener(event, cancelDiffScrollRestore, { passive: true });
     return () => {
-      for (const event of events) container.removeEventListener(event, cancelRestore);
+      for (const event of events) container.removeEventListener(event, cancelDiffScrollRestore);
     };
-  }, [codeView, viewerKey]);
+  }, [codeView, cancelDiffScrollRestore]);
 
   const treeRevealScope = { collapseScopeKey, diffSelection };
   const requestTreeReveal = useCodeViewFileReveal(codeView, treeRevealScope, codeViewFileKeys);
@@ -622,6 +626,7 @@ export default function DiffPanel({
     );
     const file = renderableFileEntries[index];
     if (!file) return;
+    cancelDiffScrollRestore();
     setCollapsedDiffFiles((current) => {
       const next = new Set(
         current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys,
@@ -652,34 +657,31 @@ export default function DiffPanel({
     if (!scrollSession || scrollSession.viewerKey !== viewerKey) return;
     const viewer = codeView?.getInstance();
     if (!viewer) return;
-    scrollSession.state.loadedFileCount = settledFileCount;
+    scrollSession.state.loadedFilePaths = lazySource ? [...readyFilePaths] : [];
     const freshReveal =
       selectedFilePath !== null && scrollSession.state.handledReveal !== diffSelection;
     if (freshReveal) {
-      const index = renderableFileEntries.findIndex(
-        (candidate) => resolveFileDiffPath(candidate.fileDiff) === selectedFilePath,
-      );
-      const file = renderableFileEntries[index];
-      if (!file) return;
-      if (collapsedDiffFileKeys.has(file.fileKey)) {
-        unfoldDiffFile(file.fileKey);
-        return;
-      }
-      if (!selectedDiffFileKey) {
-        if (lazySource) requestFile(index);
+      if (!selectedDiffFileKey) return;
+      if (collapsedDiffFileKeys.has(selectedDiffFileKey)) {
+        unfoldDiffFile(selectedDiffFileKey);
         return;
       }
       scrollSession.state.handledReveal = diffSelection;
       scrollSession.pending = { fileKey: selectedDiffFileKey, offset: 0 };
     } else {
       if (scrollSession.initialized) return;
-      // Rebuild the lazy prefix before the viewer clamps the saved offset to its content height.
-      if (
-        lazySource &&
-        settledFileCount < Math.min(scrollSession.restoreFileCount, renderableFiles.length)
-      ) {
-        loadNextFiles();
-        return;
+      // Sparse tree reveals must load alongside the prefix to recreate the saved layout.
+      if (lazySource) {
+        const missingIndices = renderableFileEntries.flatMap(({ fileDiff }, index) => {
+          const path = resolveFileDiffPath(fileDiff);
+          return scrollSession.restoreFilePaths.has(path) && !readyFilePaths.has(path)
+            ? [index]
+            : [];
+        });
+        if (missingIndices.length > 0) {
+          requestFiles(missingIndices);
+          return;
+        }
       }
       const firstFileKey = codeViewFiles[0]?.fileKey;
       if (!firstFileKey) return;
@@ -705,10 +707,8 @@ export default function DiffPanel({
     collapsedDiffFileKeys,
     unfoldDiffFile,
     lazySource,
-    requestFile,
-    settledFileCount,
-    renderableFiles.length,
-    loadNextFiles,
+    requestFiles,
+    readyFilePaths,
     codeViewFiles,
     rememberDiffScrollTop,
   ]);
@@ -753,6 +753,8 @@ export default function DiffPanel({
     });
   });
   const toggleDiffFileCollapse = () => {
+    cancelDiffScrollRestore();
+    if (scrollSessionRef.current) scrollSessionRef.current.state.scrollTop = 0;
     setCodeViewRevision((current) => current + 1);
     setCollapsedDiffFiles((current) => {
       const currentKeys =

@@ -12,7 +12,7 @@ export type DiffPanelSelection =
 
 export interface DiffPanelViewState {
   scrollTop: number;
-  loadedFileCount: number;
+  loadedFilePaths: ReadonlyArray<string>;
   // Selection identity survives remounts; a new request is distinct even when its counter resets.
   handledReveal: DiffPanelSelection | null;
 }
@@ -127,19 +127,13 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
       removeThread: (ref) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
-          if (
-            !(threadKey in state.byThreadKey) &&
-            !(threadKey in state.branchBaseRefByThreadKey) &&
-            !(threadKey in state.viewStateByThreadKey)
-          ) {
+          if (!(threadKey in state.byThreadKey) && !(threadKey in state.branchBaseRefByThreadKey)) {
             return state;
           }
           const { [threadKey]: _removed, ...byThreadKey } = state.byThreadKey;
           const { [threadKey]: _removedBaseRef, ...branchBaseRefByThreadKey } =
             state.branchBaseRefByThreadKey;
-          const { [threadKey]: _removedViewState, ...viewStateByThreadKey } =
-            state.viewStateByThreadKey;
-          return { byThreadKey, branchBaseRefByThreadKey, viewStateByThreadKey };
+          return { byThreadKey, branchBaseRefByThreadKey };
         }),
     }),
     {
