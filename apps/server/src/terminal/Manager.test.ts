@@ -523,9 +523,11 @@ it.layer(
     }),
   );
 
-  it.effect("resumed attaches leave exited terminals exited", () =>
+  it.effect("resumed attaches leave exited and evicted terminals stopped", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager();
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        maxRetainedInactiveSessions: 1,
+      });
       const exited = yield* Deferred.make<void>();
       const unsubscribeEvents = yield* manager.subscribe((event) =>
         event.type === "exited"
@@ -547,6 +549,19 @@ it.layer(
         { type: "snapshot", snapshot: expect.objectContaining({ status: "exited" }) },
       ]);
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
+
+      // Opening another terminal completes eviction before the next resumed attach.
+      yield* manager.open(openInput({ threadId: "thread-2" }));
+      const unsubscribeEvicted = yield* manager.attachStream(
+        { ...openInput(), restartIfNotRunning: true, resume: true },
+        (event) => Ref.update(attachEvents, (events) => [...events, event]),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribeEvicted));
+      expect((yield* Ref.get(attachEvents)).map((event) => event.type)).toEqual([
+        "snapshot",
+        "closed",
+      ]);
+      expect(ptyAdapter.spawnInputs).toHaveLength(2);
     }),
   );
 
