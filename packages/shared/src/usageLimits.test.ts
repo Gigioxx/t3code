@@ -223,6 +223,73 @@ describe("pools", () => {
       ],
     });
     expect(accounts[0]?.limits.windows[0]?.usedPercent).toBe(55);
+
+    for (const [driver, oldPlan, newPlan, peerPlan, remaining] of [
+      [
+        "codex",
+        "ChatGPT Plus Subscription",
+        "ChatGPT Pro 20x Subscription",
+        "ChatGPT Pro 5x Subscription",
+        80,
+      ],
+      [
+        "codex",
+        "ChatGPT Pro 20x Subscription",
+        "ChatGPT Plus Subscription",
+        "ChatGPT Pro 5x Subscription",
+        17,
+      ],
+      ["codex", "ChatGPT Pro 20x Subscription", "Unknown plan", "ChatGPT Pro 5x Subscription", 50],
+      ["codex", "ChatGPT Pro 20x Subscription", undefined, "ChatGPT Pro 5x Subscription", 50],
+      [
+        "claudeAgent",
+        "Claude Max 20x Subscription",
+        "Claude Subscription",
+        "Claude Max 5x Subscription",
+        50,
+      ],
+    ] as const) {
+      const observation = (
+        id: string,
+        label: string | undefined,
+        checkedAt: string,
+        usedPercent: number,
+      ) =>
+        provider({
+          driver: ProviderDriverKind.make(driver),
+          instanceId: ProviderInstanceId.make(id),
+          auth: { status: "authenticated", email: `${id}@example.com`, label },
+          usageLimits: { checkedAt, windows: [{ ...window, usedPercent }] },
+        });
+      const reports = new Map([
+        [
+          EnvironmentId.make("env-a"),
+          {
+            ...laptop,
+            serverConfig: { providers: [observation("same", oldPlan, checkedAt, 100)] },
+          },
+        ],
+        [
+          EnvironmentId.make("env-b"),
+          {
+            entry: { target: { label: "Desktop" } },
+            serverConfig: {
+              providers: [
+                observation("same", newPlan, "2026-09-03T11:30:00.000Z", 0),
+                observation("peer", peerPlan, checkedAt, 100),
+              ],
+            },
+          },
+        ],
+      ]);
+      for (const ordered of [reports, new Map([...reports].toReversed())]) {
+        const context = `${oldPlan} → ${newPlan ?? "no plan"}, ${[...ordered.keys()].join(", ")}`;
+        const merged = collectLimitAccounts(ordered);
+        const session = collectLimitPools(merged, now)[0]?.windows[0];
+        expect.soft(merged, context).toHaveLength(2);
+        expect.soft(session?.remainingPercent, context).toBe(remaining);
+      }
+    }
   });
 
   it("merges OpenCode Go limits from machines with the same API key", () => {
