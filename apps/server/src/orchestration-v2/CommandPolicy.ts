@@ -165,10 +165,14 @@ function resolveDeliveryIntent(
   if (deliveryIntent === "restart") {
     return { type: "restart_active", targetRunId: activeRun.id };
   }
+  // A run can be active before its provider turn starts or after it finishes.
+  // Queue automatic input in those gaps so steering cannot reject the message.
   if (
     activeRun.status === "preparing" ||
     activeRun.status === "starting" ||
-    !hasRunningProviderTurn(projection, activeRun)
+    !projection.providerTurns.some(
+      (turn) => turn.runAttemptId === activeRun.activeAttemptId && turn.status === "running",
+    )
   ) {
     return { type: "queue_after_active" };
   }
@@ -193,19 +197,6 @@ function resolveDeliveryIntent(
     return { type: "restart_active", targetRunId: activeRun.id };
   }
   return { type: "queue_after_active" };
-}
-
-// Steering needs a provider turn that is actually running. A run stays
-// `running`/`waiting` both before its attempt's turn starts and after that turn
-// completes while the run settles, so an automatic message landing in either
-// window waits behind the run instead of failing the dispatch.
-function hasRunningProviderTurn(
-  projection: OrchestrationV2ThreadProjection,
-  run: OrchestrationV2Run,
-): boolean {
-  return projection.providerTurns.some(
-    (turn) => turn.runAttemptId === run.activeAttemptId && turn.status === "running",
-  );
 }
 
 interface CapabilityCheckInput {
