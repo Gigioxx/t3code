@@ -6,6 +6,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef, RunId } from "@t3tools/contracts";
 import {
   ArrowRightIcon,
@@ -20,7 +21,7 @@ import {
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useFilesystemReadAccess } from "~/state/filesystem";
 import { useOpenInPreferredEditor } from "../editorPreferences";
@@ -29,7 +30,11 @@ import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
-import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
+import {
+  selectThreadDiffPanelSelection,
+  useDiffPanelStore,
+  type DiffPanelViewState,
+} from "../diffPanelStore";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useTheme } from "../hooks/useTheme";
 import { useStableCallback } from "../hooks/useStableCallback";
@@ -116,15 +121,16 @@ interface CollapsedDiffFilesState {
   readonly fileKeys: ReadonlySet<string>;
 }
 
+interface DiffScrollSession {
+  viewerKey: string;
+  restoreFileCount: number;
+  initialized: boolean;
+  pending: { fileKey: string; offset: number } | null;
+  state: DiffPanelViewState;
+}
+
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
 
-// Pierre remounts (and resets to the top) whenever the review scope changes, so remember where
-// each thread's scope was left and jump back to it when that scope mounts again.
-const diffScrollTopByScopeKey = new Map<string, number>();
-// Last file reveal applied per scope, so a remount does not repeat it over the saved offset.
-const handledDiffRevealByScopeKey = new Map<string, string>();
-
-/** Collapse control for one file header; re-renders only when its own file changes. */
 function DiffFileCollapseToggle({
   filePath,
   fileKey,
@@ -224,7 +230,11 @@ export default function DiffPanel({
     fileKeys: EMPTY_COLLAPSED_DIFF_FILE_KEYS,
   }));
   const [codeViewRevision, setCodeViewRevision] = useState(0);
-  const [codeView, setCodeView] = useState<AnnotatableCodeViewHandle | null>(null);
+  const scrollSessionRef = useRef<DiffScrollSession | null>(null);
+  const [codeViewState, setCodeViewState] = useState<{
+    key: string;
+    viewer: AnnotatableCodeViewHandle;
+  } | null>(null);
 
   const routeThreadRef = useThreadRouteRef();
   const activeThreadId = routeThreadRef?.threadId ?? null;
@@ -527,48 +537,82 @@ export default function DiffPanel({
     ? (codeViewFiles.find((candidate) => candidate.filePath === selectedFilePath)?.fileKey ?? null)
     : null;
 
-  const firstDiffFileKey = codeViewFiles[0]?.fileKey ?? null;
-  const rememberDiffScrollTop = useCallback(
-    (scrollTop: number) => {
-      if (collapseScopeKey) diffScrollTopByScopeKey.set(collapseScopeKey, scrollTop);
-    },
-    [collapseScopeKey],
-  );
-
-  useEffect(() => {
-    const scrollTop = collapseScopeKey ? diffScrollTopByScopeKey.get(collapseScopeKey) : undefined;
-    if (!scrollTop || !firstDiffFileKey || !codeView?.getInstance()) return;
-    // Position targets subtract the sticky header, so anchor to the first file instead.
-    codeView.scrollTo({
-      type: "item",
-      id: firstDiffFileKey,
-      align: "start",
-      offset: -scrollTop,
-      behavior: "instant",
-    });
-  }, [codeView, collapseScopeKey, firstDiffFileKey]);
-
-  useEffect(() => {
-    if (!selectedDiffFileKey || !codeView?.getInstance()) return;
-    const revealKey = `${selectedDiffFileKey}:${selectedFileRevealRequestId}`;
-    // Remounting with the same reveal keeps the saved position; only fresh requests jump to the file.
-    if (collapseScopeKey) {
-      if (
-        handledDiffRevealByScopeKey.get(collapseScopeKey) === revealKey &&
-        diffScrollTopByScopeKey.has(collapseScopeKey)
-      ) {
-        return;
-      }
-      handledDiffRevealByScopeKey.set(collapseScopeKey, revealKey);
-    }
-    codeView.scrollTo({ type: "item", id: selectedDiffFileKey, align: "start" });
-  }, [
-    codeView,
+  const scrollScopeKey = JSON.stringify([reviewSectionId, selectedBaseRef]);
+  const viewerKey = JSON.stringify([
     codeViewMountKey,
-    collapseScopeKey,
-    selectedDiffFileKey,
-    selectedFileRevealRequestId,
+    selectedBaseRef,
+    lazySource ? filePatchScope : "preview",
   ]);
+  const codeView = codeViewState?.key === viewerKey ? codeViewState.viewer : null;
+  const setCodeView = (viewer: AnnotatableCodeViewHandle | null) =>
+    setCodeViewState(viewer ? { key: viewerKey, viewer } : null);
+
+  useEffect(() => {
+    const saved = routeThreadRef
+      ? useDiffPanelStore.getState().viewStateByThreadKey[scopedThreadKey(routeThreadRef)]?.[
+          scrollScopeKey
+        ]
+      : undefined;
+    const session: DiffScrollSession = {
+      viewerKey,
+      restoreFileCount: saved?.loadedFileCount ?? 0,
+      initialized: false,
+      pending: null,
+      state: {
+        scrollTop: saved?.scrollTop ?? 0,
+        loadedFileCount: saved?.loadedFileCount ?? 0,
+        handledReveal: saved?.handledReveal ?? null,
+      },
+    };
+    scrollSessionRef.current = session;
+    return () => {
+      if (routeThreadRef && session.initialized && session.pending === null) {
+        useDiffPanelStore
+          .getState()
+          .saveViewState(routeThreadRef, scrollScopeKey, { ...session.state });
+      }
+    };
+  }, [routeThreadRef, scrollScopeKey, viewerKey]);
+
+  const rememberDiffScrollTop: NonNullable<
+    ComponentProps<typeof AnnotatableCodeView>["onScroll"]
+  > = (scrollTop, viewer) => {
+    const scrollSession = scrollSessionRef.current;
+    if (!scrollSession || scrollSession.viewerKey !== viewerKey) return;
+    // Mount scroll events precede restoration; keep the saved position until its target is reached.
+    if (!scrollSession.initialized) return;
+    if (scrollSession.pending) {
+      const top = viewer.getTopForItem(scrollSession.pending.fileKey);
+      if (top === undefined || viewer.getHeight() === 0) return;
+      if (top - scrollSession.pending.offset > 0 && viewer.getScrollHeight() <= viewer.getHeight())
+        return;
+      const target = Math.max(
+        0,
+        Math.min(top - scrollSession.pending.offset, viewer.getScrollHeight() - viewer.getHeight()),
+      );
+      if (Math.abs(scrollTop - target) > 1) return;
+      scrollSession.pending = null;
+    }
+    scrollSession.state.scrollTop = scrollTop;
+  };
+
+  useEffect(() => {
+    const scrollSession = scrollSessionRef.current;
+    if (!scrollSession || scrollSession.viewerKey !== viewerKey) return;
+    const viewer = codeView?.getInstance();
+    const container = viewer?.getContainerElement();
+    if (!viewer || !container) return;
+    const cancelRestore = () => {
+      scrollSession.initialized = true;
+      scrollSession.pending = null;
+      scrollSession.state.scrollTop = viewer.getScrollTop();
+    };
+    const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+    for (const event of events) container.addEventListener(event, cancelRestore, { passive: true });
+    return () => {
+      for (const event of events) container.removeEventListener(event, cancelRestore);
+    };
+  }, [codeView, viewerKey]);
 
   const treeRevealScope = { collapseScopeKey, diffSelection };
   const requestTreeReveal = useCodeViewFileReveal(codeView, treeRevealScope, codeViewFileKeys);
@@ -591,18 +635,83 @@ export default function DiffPanel({
     requestTreeReveal(file.fileKey);
   };
 
-  const externalRevealRef = useRef<{ cache: string; key: string } | null>(null);
+  // Find can ask again before the unfolded file reaches the viewer, so this must never fold.
+  const unfoldDiffFile = useStableCallback((fileKey: string) => {
+    setCollapsedDiffFiles((current) => {
+      const fileKeys =
+        current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys;
+      if (!fileKeys.has(fileKey)) return current;
+      const next = new Set(fileKeys);
+      next.delete(fileKey);
+      return { scopeKey: collapseScopeKey, fileKeys: next };
+    });
+  });
+
   useEffect(() => {
-    if (!lazySource || !selectedFilePath) return;
-    const key = `${selectedFilePath}:${selectedFileRevealRequestId}`;
-    if (
-      externalRevealRef.current?.cache === filePatchScope &&
-      externalRevealRef.current.key === key
-    )
-      return;
-    externalRevealRef.current = { cache: filePatchScope, key };
-    revealDiffFile(selectedFilePath);
-  }, [lazySource, selectedFilePath, selectedFileRevealRequestId, filePatchScope, revealDiffFile]);
+    const scrollSession = scrollSessionRef.current;
+    if (!scrollSession || scrollSession.viewerKey !== viewerKey) return;
+    const viewer = codeView?.getInstance();
+    if (!viewer) return;
+    scrollSession.state.loadedFileCount = settledFileCount;
+    const freshReveal =
+      selectedFilePath !== null && scrollSession.state.handledReveal !== diffSelection;
+    if (freshReveal) {
+      const index = renderableFileEntries.findIndex(
+        (candidate) => resolveFileDiffPath(candidate.fileDiff) === selectedFilePath,
+      );
+      const file = renderableFileEntries[index];
+      if (!file) return;
+      if (collapsedDiffFileKeys.has(file.fileKey)) {
+        unfoldDiffFile(file.fileKey);
+        return;
+      }
+      if (!selectedDiffFileKey) {
+        if (lazySource) requestFile(index);
+        return;
+      }
+      scrollSession.state.handledReveal = diffSelection;
+      scrollSession.pending = { fileKey: selectedDiffFileKey, offset: 0 };
+    } else {
+      if (scrollSession.initialized) return;
+      // Rebuild the lazy prefix before the viewer clamps the saved offset to its content height.
+      if (
+        lazySource &&
+        settledFileCount < Math.min(scrollSession.restoreFileCount, renderableFiles.length)
+      ) {
+        loadNextFiles();
+        return;
+      }
+      const firstFileKey = codeViewFiles[0]?.fileKey;
+      if (!firstFileKey) return;
+      scrollSession.pending = { fileKey: firstFileKey, offset: -scrollSession.state.scrollTop };
+    }
+    scrollSession.initialized = true;
+    // A position target subtracts the sticky header; a first-item offset restores the exact pixel.
+    viewer.scrollTo({
+      type: "item",
+      id: scrollSession.pending.fileKey,
+      align: "start",
+      offset: scrollSession.pending.offset,
+      behavior: "instant",
+    });
+    rememberDiffScrollTop(viewer.getScrollTop(), viewer);
+  }, [
+    codeView,
+    viewerKey,
+    diffSelection,
+    selectedFilePath,
+    selectedDiffFileKey,
+    renderableFileEntries,
+    collapsedDiffFileKeys,
+    unfoldDiffFile,
+    lazySource,
+    requestFile,
+    settledFileCount,
+    renderableFiles.length,
+    loadNextFiles,
+    codeViewFiles,
+    rememberDiffScrollTop,
+  ]);
 
   const openDiffFile = (filePath: string) => {
     openDiffFilePrimaryAction({
@@ -643,18 +752,6 @@ export default function DiffPanel({
       return { scopeKey: collapseScopeKey, fileKeys: next };
     });
   });
-  // Find can ask again before the unfolded file reaches the viewer, so this must never fold.
-  const unfoldDiffFile = useStableCallback((fileKey: string) => {
-    setCollapsedDiffFiles((current) => {
-      const fileKeys =
-        current.scopeKey === collapseScopeKey ? current.fileKeys : defaultCollapsedDiffFileKeys;
-      if (!fileKeys.has(fileKey)) return current;
-      const next = new Set(fileKeys);
-      next.delete(fileKey);
-      return { scopeKey: collapseScopeKey, fileKeys: next };
-    });
-  });
-
   const toggleDiffFileCollapse = () => {
     setCodeViewRevision((current) => current + 1);
     setCollapsedDiffFiles((current) => {
@@ -1121,7 +1218,7 @@ export default function DiffPanel({
                     key={collapseScopeKey ?? reviewSectionId}
                     viewerRef={setCodeView}
                     onScroll={rememberDiffScrollTop}
-                    codeViewKey={`${codeViewMountKey}:${lazySource ? filePatchScope : "preview"}`}
+                    codeViewKey={viewerKey}
                     className="h-full min-h-0 overflow-auto"
                     files={codeViewFiles}
                     renderCodeViewFooter={renderLoadingBoundary}

@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId, RunId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -11,8 +11,44 @@ describe("diffPanelStore", () => {
     useDiffPanelStore.setState({
       byThreadKey: {},
       branchBaseRefByThreadKey: {},
+      viewStateByThreadKey: {},
     }),
   );
+
+  it("keeps view state isolated by environment, thread, and scope until its thread is removed", () => {
+    const otherThread = scopeThreadRef(THREAD_REF.environmentId, ThreadId.make("thread-2"));
+    const otherEnvironment = scopeThreadRef(
+      EnvironmentId.make("environment-2"),
+      THREAD_REF.threadId,
+    );
+    const state = useDiffPanelStore.getState();
+    const branch = { scrollTop: 1200, loadedFileCount: 8, handledReveal: null };
+    state.selectTurn(THREAD_REF, RunId.make("turn-1"), "src/app.ts");
+    const turn = {
+      scrollTop: 2500,
+      loadedFileCount: 12,
+      handledReveal: useDiffPanelStore.getState().byThreadKey[scopedThreadKey(THREAD_REF)]!,
+    };
+    state.saveViewState(THREAD_REF, "branch", branch);
+    state.saveViewState(THREAD_REF, "turn:turn-1", turn);
+    state.saveViewState(otherThread, "branch", { ...branch, scrollTop: 400 });
+    state.saveViewState(otherEnvironment, "branch", { ...branch, scrollTop: 800 });
+
+    const views = useDiffPanelStore.getState().viewStateByThreadKey;
+    expect(views[scopedThreadKey(THREAD_REF)]).toEqual({ branch, "turn:turn-1": turn });
+    expect(views[scopedThreadKey(otherThread)]?.branch?.scrollTop).toBe(400);
+    expect(views[scopedThreadKey(otherEnvironment)]?.branch?.scrollTop).toBe(800);
+
+    state.removeThread(otherThread);
+    expect(useDiffPanelStore.getState().viewStateByThreadKey).toEqual({
+      [scopedThreadKey(THREAD_REF)]: views[scopedThreadKey(THREAD_REF)],
+      [scopedThreadKey(otherEnvironment)]: views[scopedThreadKey(otherEnvironment)],
+    });
+    state.removeThread(THREAD_REF);
+    expect(
+      useDiffPanelStore.getState().viewStateByThreadKey[scopedThreadKey(THREAD_REF)],
+    ).toBeUndefined();
+  });
 
   it("defaults each thread to Changes without requiring git status", () => {
     expect(
