@@ -523,6 +523,30 @@ it.layer(
     }),
   );
 
+  it.effect("resumed attaches respect closes before this server has seen a terminal", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
+
+      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
+      const unsubscribe = yield* manager.attachStream(
+        { ...openInput(), restartIfNotRunning: true, resume: true },
+        (event) => Ref.update(attachEvents, (events) => [...events, event]),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      expect((yield* Ref.get(attachEvents)).map((event) => event.type)).toEqual(["closed"]);
+      expect(ptyAdapter.spawnInputs).toHaveLength(0);
+
+      const restarted = yield* manager.restart(restartInput());
+      expect(restarted.status).toBe("running");
+      expect((yield* Ref.get(attachEvents)).map((event) => event.type)).toEqual([
+        "closed",
+        "restarted",
+      ]);
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+    }),
+  );
+
   it.effect("resumed attaches leave exited and evicted terminals stopped", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager(5, {

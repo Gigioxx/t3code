@@ -50,8 +50,7 @@ export function createTerminalEnvironmentAtoms<R, E>(
     attach: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:terminal:attach",
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) => {
-        // Only a resubscription that already saw a reply asks the server to resume, so a
-        // first attach lost before any reply is retried unchanged and still opens.
+        // Retry an unanswered first attach unchanged so it can still open the shell.
         let replied = false;
         return subscribeDynamic(WS_METHODS.terminalAttach, () =>
           Effect.sync(() => (replied ? { ...input, resume: true } : input)),
