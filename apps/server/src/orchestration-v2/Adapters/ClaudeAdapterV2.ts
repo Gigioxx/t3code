@@ -5250,8 +5250,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               createdBy: "agent",
               creationSource: "provider",
             });
-            // A subagent recovered on resume may have launched while T3 was
-            // not listening, so its thread may not exist yet.
+            // Recovery cannot tell whether the child thread was already persisted.
             yield* emitProviderEvent({
               type: "app_thread.created",
               driver: CLAUDE_PROVIDER,
