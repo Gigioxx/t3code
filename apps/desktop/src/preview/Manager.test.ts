@@ -2,7 +2,7 @@ import * as NodeVM from "node:vm";
 
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import { DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER } from "@t3tools/contracts";
+import { DesktopBrowserEvent, DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER } from "@t3tools/contracts";
 import type {
   DesktopPreviewRecordingFrame,
   DesktopPreviewRecordingInputEvent,
@@ -16,6 +16,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -33,6 +34,11 @@ import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewManager from "./Manager.ts";
 import { capturePreviewPage } from "./PreviewCapture.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
+
+const decodeDesktopBrowserEvent = Schema.decodeUnknownSync(
+  Schema.fromJsonString(DesktopBrowserEvent),
+);
+const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("fitPictureInPictureContentSize", () => {
   it("preserves the PiP content area across aspect-ratio changes", () => {
@@ -428,7 +434,7 @@ const makeScaledCaptureGuest = (scaled = true) => {
     alt = "";
     className = "";
     textContent = "";
-    dataset = { previewTab: "tab_1" };
+    dataset: Record<string, string> = {};
     style = { cssText: "", display: "", pointerEvents: "", maxWidth: "" };
     children: HostElement[] = [];
     parent: HostElement | undefined;
@@ -462,6 +468,7 @@ const makeScaledCaptureGuest = (scaled = true) => {
     }
   }
   const view = new HostElement("webview");
+  view.dataset = { previewTab: "tab_1", previewServerTab: "server-tab-1" };
   view.style.cssText = "width: 1280px; height: 720px; transform: scale(0.5)";
   roots.push(view);
   const elements = (): HostElement[] => roots.flatMap((root) => [root, ...root.children]);
@@ -473,7 +480,13 @@ const makeScaledCaptureGuest = (scaled = true) => {
   const host = makeTestHostWebContents();
   const context = {
     document: {
-      querySelector: () => view,
+      querySelector: (selector: string) => {
+        const match = /^webview\[data-preview-(tab|server-tab)=["']?([^"'\]]+)["']?\]$/.exec(
+          selector,
+        );
+        const key = match?.[1] === "server-tab" ? "previewServerTab" : "previewTab";
+        return match && view.dataset[key] === match[2] ? view : null;
+      },
       createElement: (tag: string) => new HostElement(tag),
       getElementById: (id: string) => elements().find((element) => element.id === id),
     },
@@ -527,6 +540,7 @@ const makeScaledCaptureGuest = (scaled = true) => {
     },
     expectRestored: () => {
       expect(roots).toEqual([view]);
+      expect(view.dataset).not.toHaveProperty("previewCapture");
       expect(view.style.cssText).toBe("width: 1280px; height: 720px; transform: scale(0.5)");
       expect(wc.getZoomFactor()).toBe(1);
     },
@@ -3111,16 +3125,99 @@ describe("PreviewManager", () => {
           Effect.promise((_signal) => setupStarted.promise),
           Fiber.await(fiber),
         );
-        if (fiber.pollUnsafe() === undefined) {
-          yield* TestClock.adjust("2 seconds");
-          expect(fiber.pollUnsafe()).toBeUndefined();
-        }
+        yield* TestClock.adjust("2 seconds");
+        expect(fiber.pollUnsafe()).toBeUndefined();
         pending.resolve();
         const artifact = yield* Fiber.join(fiber);
         expect(writeFile).toHaveBeenCalledWith(artifact.path, Buffer.from("viewport-detail"));
         guest.expectRestored();
       }),
     ),
+  );
+
+  effectIt.effect.each([
+    { format: "jpeg", quality: 73, clip: { x: 13, y: 29, width: 1280, height: 720, scale: 0.75 } },
+    { format: "png", clip: { x: 13, y: 29, width: 1280, height: 720, scale: 0.5 } },
+  ] as const)("captures unscaled $format detail through the server CDP relay", (params) =>
+    Effect.gen(function* () {
+      const guest = makeScaledCaptureGuest();
+      const serverTab = { threadId: "thread-1", tabId: "server-tab-1" };
+      const sendCommand = vi.fn(async (method: string) => {
+        if (method !== "Page.captureScreenshot") return {};
+        if (guest.isUnscaled()) guest.expectFrozen();
+        return {
+          data: guest
+            .image(guest.isUnscaled() ? "viewport-detail" : "scaled-detail")
+            .toPNG()
+            .toString("base64"),
+        };
+      });
+      Object.assign(guest.wc.debugger, { sendCommand });
+      Object.assign(guest.wc, { isDevToolsOpened: () => false, getUserAgent: () => "Electron" });
+      fromId.mockReturnValue(guest.wc);
+      const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+      const lines = yield* Queue.unbounded<DesktopBrowserEvent>();
+      yield* host.events.pipe(
+        Stream.runForEach((line) =>
+          Queue.offer(lines, decodeDesktopBrowserEvent(new TextDecoder().decode(line))),
+        ),
+        Effect.forkScoped,
+      );
+      const manager = yield* PreviewManager.PreviewManager;
+      yield* manager.createTab("tab_1", { serverTab });
+      yield* manager.registerWebview("tab_1", 42);
+      expect(yield* Queue.take(lines)).toEqual({ type: "attached", ...serverTab });
+      sendCommand.mockClear();
+
+      yield* host.handleCommandLine(
+        JSON.stringify({
+          type: "cdp",
+          ...serverTab,
+          message: JSON.stringify({
+            id: 1,
+            method: "Page.captureScreenshot",
+            params,
+            sessionId: "t3-preview-page",
+          }),
+        }),
+      );
+      const reply = yield* Queue.take(lines);
+      expect(reply).toMatchObject({ type: "cdp", ...serverTab });
+      if (reply.type !== "cdp") throw new Error("Expected a CDP screenshot reply");
+      expect(decodeJson(reply.message)).toEqual({
+        id: 1,
+        result: { data: Buffer.from("viewport-detail").toString("base64") },
+        sessionId: "t3-preview-page",
+      });
+      expect(sendCommand.mock.calls).toEqual([["Page.captureScreenshot", params]]);
+      guest.expectRestored();
+    }).pipe(Effect.provide(managerLayer()), Effect.scoped),
+  );
+
+  effectIt.effect.each(["reject", "stall"] as const)(
+    "falls back to direct capture within two seconds when the transform probe will %s",
+    (failure) =>
+      Effect.gen(function* () {
+        const guest = makeScaledCaptureGuest();
+        const probeStarted = Promise.withResolvers<void>();
+        guest.host.executeJavaScript.mockImplementationOnce(async () => {
+          probeStarted.resolve();
+          if (failure === "reject") throw new Error("Host IPC unavailable");
+          return new Promise(() => {});
+        });
+        guest.capturePage.mockImplementation(async () => {
+          guest.expectRestored();
+          return guest.image("scaled-detail");
+        });
+        const fiber = yield* capturePreviewPage("tab_1", guest.wc).pipe(Effect.forkChild);
+        yield* Effect.promise(() => probeStarted.promise);
+        yield* TestClock.adjust("2 seconds");
+
+        expect(fiber.pollUnsafe()).toMatchObject({ _tag: "Success" });
+        expect((yield* Fiber.join(fiber)).toPNG()).toEqual(Buffer.from("scaled-detail"));
+        expect(guest.capturePage).toHaveBeenCalledOnce();
+        guest.expectRestored();
+      }),
   );
 
   effectIt.effect("serializes concurrent captures of the same scaled guest", () =>
