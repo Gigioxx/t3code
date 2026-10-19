@@ -134,28 +134,17 @@ it.each(["preparing", "starting"] as const)(
   },
 );
 
-it.each(["pending", "completed"] as const)(
-  "queues an automatic message while the active run's provider turn is %s",
-  (status) => {
-    const projection = dispatchProjection(baseCapabilities);
-    assert.deepEqual(
-      CommandPolicy.resolveMessageDispatchIntent(
-        {
-          ...projection,
-          providerTurns: projection.providerTurns.map((turn) => ({ ...turn, status })),
-        },
-        { type: "start_immediately" },
-        "auto",
-      ),
-      { type: "queue_after_active" },
-    );
-  },
-);
-
-it("queues an automatic message before the active run's provider turn exists", () => {
+it.each([
+  ["has not started", []],
+  ["is pending", [{ runAttemptId: activeAttemptId, status: "pending" }]],
+  ["has completed", [{ runAttemptId: activeAttemptId, status: "completed" }]],
+])("queues an automatic message when the active run's provider turn %s", (_, providerTurns) => {
   assert.deepEqual(
     CommandPolicy.resolveMessageDispatchIntent(
-      { ...dispatchProjection(baseCapabilities), providerTurns: [] },
+      {
+        ...dispatchProjection(baseCapabilities),
+        providerTurns,
+      } as unknown as OrchestrationV2ThreadProjection,
       { type: "start_immediately" },
       "auto",
     ),
