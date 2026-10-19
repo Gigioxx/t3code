@@ -75,7 +75,10 @@ function SettingsSearchTargetProvider({
   return <SettingsSearchTargetContext value={value}>{children}</SettingsSearchTargetContext>;
 }
 
+let pendingTargetScroll: AbortController | undefined;
+
 function scrollAndFocusSettingsTarget(target: HTMLElement, highlight = true): void {
+  pendingTargetScroll?.abort();
   const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const markedScrollTarget =
     typeof target.querySelector === "function"
@@ -93,18 +96,53 @@ function scrollAndFocusSettingsTarget(target: HTMLElement, highlight = true): vo
       block: "center",
     });
   scroll();
-  // A target inside a collapsible panel that is still opening is measured
-  // before the panel reaches full height, so scroll again once it has grown.
-  const openingPanel = target.parentElement?.closest<HTMLElement>(
-    '[data-slot="collapsible-panel"][data-starting-style]',
+  const panel = target.parentElement?.closest<HTMLElement>(
+    '[data-slot="collapsible-panel"][data-open]',
   );
-  if (openingPanel) {
-    const onPanelOpened = (event: TransitionEvent) => {
-      if (event.target !== openingPanel) return;
-      openingPanel.removeEventListener("transitionend", onPanelOpened);
-      scroll();
+  const heightTransition = () =>
+    panel
+      ?.getAnimations()
+      .find(
+        (animation) =>
+          animation instanceof CSSTransition && animation.transitionProperty === "height",
+      );
+  if (panel && (panel.hasAttribute("data-starting-style") || heightTransition())) {
+    const controller = new AbortController();
+    pendingTargetScroll = controller;
+    const { signal } = controller;
+    const finishScroll = () => {
+      if (signal.aborted) return;
+      controller.abort();
+      if (
+        panel.hasAttribute("data-open") &&
+        target.isConnected &&
+        document.activeElement === target
+      ) {
+        scroll();
+      }
     };
-    openingPanel.addEventListener("transitionend", onPanelOpened);
+    const waitForHeight = () => {
+      const transition = heightTransition();
+      if (transition) {
+        void transition.finished.then(finishScroll, () => controller.abort());
+      } else {
+        finishScroll();
+      }
+    };
+    // Base UI clears the starting style before the height transition finishes.
+    if (panel.hasAttribute("data-starting-style")) {
+      const observer = new MutationObserver(() => {
+        if (!panel.hasAttribute("data-starting-style")) {
+          observer.disconnect();
+          waitForHeight();
+        }
+      });
+      observer.observe(panel, { attributes: true, attributeFilter: ["data-starting-style"] });
+      signal.addEventListener("abort", () => observer.disconnect(), { once: true });
+    } else {
+      waitForHeight();
+    }
+    target.addEventListener("blur", () => controller.abort(), { once: true, signal });
   }
   target.focus({ preventScroll: true });
   target.classList.remove("settings-search-target-pulse");
