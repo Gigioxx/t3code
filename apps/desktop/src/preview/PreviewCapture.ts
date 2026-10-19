@@ -7,15 +7,19 @@ const encodeString = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 let captureSequence = 0;
 const captureLocks = new WeakMap<Electron.WebContents, Semaphore.Semaphore>();
 
-// Chromium rasterizes CSS-scaled guests at their displayed size, even for capturePage.
+// Chromium rasterizes CSS-scaled guests at their displayed size, including CDP screenshots.
 // Freeze only that preview while capturing unscaled pixels; never change its viewport.
-export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
+export const withUnscaledPreviewCapture = <A, E, R>(
+  tabId: string,
+  wc: Electron.WebContents,
+  capture: Effect.Effect<A, E, R>,
+  tabAttribute: "data-preview-tab" | "data-preview-server-tab" = "data-preview-tab",
+) => {
   let lock = captureLocks.get(wc);
   if (!lock) {
     lock = Semaphore.makeUnsafe(1);
     captureLocks.set(wc, lock);
   }
-  const capture = Effect.tryPromise((_signal) => wc.capturePage());
   const unscaledCapture = capture.pipe(Effect.timeout("1 second"));
   return lock
     .withPermit(
@@ -24,9 +28,12 @@ export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
         if (!host || host.isDestroyed()) return yield* unscaledCapture;
         const scaled = yield* Effect.tryPromise((_signal) =>
           host.executeJavaScript(`(() => {
-          const view = document.querySelector("webview[data-preview-tab=" + CSS.escape(${encodeString(tabId)}) + "]");
-          return !!view && getComputedStyle(view).transform !== "none";
+          const view = document.querySelector("webview[${tabAttribute}=" + CSS.escape(${encodeString(tabId)}) + "]");
+          return !!view && view.getWebContentsId() === ${wc.id} && getComputedStyle(view).transform !== "none";
         })()`),
+        ).pipe(
+          Effect.timeout("250 millis"),
+          Effect.orElseSucceed(() => false),
         );
         if (scaled !== true) return yield* unscaledCapture;
         const frozen = yield* Effect.tryPromise((_signal) => wc.capturePage());
@@ -37,7 +44,7 @@ export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
           host.executeJavaScript(`(async () => {
             const token = ${encodeString(token)};
             if (globalThis[token] || Date.now() >= ${deadline}) throw new Error("Preview capture expired");
-            const view = document.querySelector("webview[data-preview-tab=" + CSS.escape(${encodeString(tabId)}) + "]");
+            const view = document.querySelector("webview[${tabAttribute}=" + CSS.escape(${encodeString(tabId)}) + "]");
             if (!view || view.getWebContentsId() !== ${wc.id}) throw new Error("Preview guest detached before capture");
             const frozen = document.createElement("img");
             frozen.src = ${encodeString(frozen.toDataURL())};
@@ -105,3 +112,10 @@ export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
       Effect.timeout("5 seconds"),
     );
 };
+
+export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) =>
+  withUnscaledPreviewCapture(
+    tabId,
+    wc,
+    Effect.tryPromise((_signal) => wc.capturePage()),
+  );

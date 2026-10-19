@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 
 import { createCdpRelayConnection, type CdpRelayConnection } from "./CdpRelay.ts";
 import { sendPageCommand } from "./GuestInput.ts";
+import { withUnscaledPreviewCapture } from "./PreviewCapture.ts";
 
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(DesktopBrowserEvent));
 const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopBrowserCommand));
@@ -80,7 +81,9 @@ export const make = Effect.gen(function* () {
     readonly x: number;
     readonly y: number;
   }>(16);
-  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const context = yield* Effect.context<never>();
+  const runFork = Effect.runForkWith(context);
+  const runPromise = Effect.runPromiseWith(context);
   const tabs = new Map<string, AttachedTab>();
   const emit = (event: DesktopBrowserEventType) => runFork(PubSub.publish(outbox, event));
 
@@ -89,10 +92,20 @@ export const make = Effect.gen(function* () {
     const { webContents, debugger: debuggee } = tab.debuggee;
     const relay: CdpRelayConnection = createCdpRelayConnection(
       {
-        send: (method, params, sessionId) =>
-          sessionId === undefined
-            ? sendPageCommand(webContents, debuggee, method, params)
-            : debuggee.sendCommand(method, params, sessionId),
+        send: (method, params, sessionId) => {
+          if (sessionId !== undefined) return debuggee.sendCommand(method, params, sessionId);
+          if (method === "Page.captureScreenshot") {
+            return runPromise(
+              withUnscaledPreviewCapture(
+                tab.key.tabId,
+                webContents,
+                Effect.tryPromise((_signal) => debuggee.sendCommand(method, params)),
+                "data-preview-server-tab",
+              ),
+            );
+          }
+          return sendPageCommand(webContents, debuggee, method, params);
+        },
         targetId: () =>
           debuggee
             .sendCommand("Target.getTargetInfo")
