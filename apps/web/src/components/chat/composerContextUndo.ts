@@ -22,28 +22,31 @@ export interface RetainedContextPayloads extends RetainedAttachmentContextPayloa
   threads: Map<string, ThreadContextRecord>;
 }
 
-/**
- * Payloads for chips the prompt no longer references. History undo restores the
- * reference text but knows nothing about the draft records behind it, so a delete keeps its
- * payload here and an undo puts it back rather than leaving a dangling chip.
- *
- * Scoped to one draft: switching drafts or unmounting releases them, so deleted files do not
- * stay reachable for the composer's whole lifetime.
- */
-export function useRetainedContextPayloads(draftTargetKey: string): RetainedContextPayloads {
-  const [retained] = useState<RetainedContextPayloads>(() => ({
+function createRetainedContextPayloads(): RetainedContextPayloads {
+  return {
     terminals: new Map(),
     reviewComments: new Map(),
     threads: new Map(),
     files: new Map(),
     previewAnnotations: new Map(),
+  };
+}
+
+// Deleted chips keep their payloads until their draft's undo history ends.
+export function useRetainedContextPayloads(draftTargetKey: string): RetainedContextPayloads {
+  const [draft, setDraft] = useState(() => ({
+    targetKey: draftTargetKey,
+    payloads: createRetainedContextPayloads(),
   }));
+  if (draft.targetKey !== draftTargetKey) {
+    setDraft({ targetKey: draftTargetKey, payloads: createRetainedContextPayloads() });
+  }
+  const retained = draft.payloads;
   useEffect(
     () => () => {
       for (const payloads of Object.values(retained)) payloads.clear();
     },
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Switching drafts releases the previous draft's payloads.
-    [draftTargetKey, retained],
+    [retained],
   );
   return retained;
 }
