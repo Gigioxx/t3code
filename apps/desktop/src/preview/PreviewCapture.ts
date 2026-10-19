@@ -14,13 +14,17 @@ export const withUnscaledPreviewCapture = <A, E, R>(
   wc: Electron.WebContents,
   capture: Effect.Effect<A, E, R>,
   tabAttribute: "data-preview-tab" | "data-preview-server-tab" = "data-preview-tab",
+  unscaledCaptureTimeoutMs?: number,
 ) => {
   let lock = captureLocks.get(wc);
   if (!lock) {
     lock = Semaphore.makeUnsafe(1);
     captureLocks.set(wc, lock);
   }
-  const unscaledCapture = capture.pipe(Effect.timeout("1 second"));
+  const unscaledCapture =
+    unscaledCaptureTimeoutMs === undefined
+      ? capture
+      : capture.pipe(Effect.timeout(unscaledCaptureTimeoutMs));
   return lock
     .withPermit(
       Effect.gen(function* () {
@@ -58,7 +62,8 @@ export const withUnscaledPreviewCapture = <A, E, R>(
             holder.style.display = "contents";
             const style = document.createElement("style");
             const selector = 'webview[data-preview-capture="' + token + '"]';
-            style.textContent = selector + ' { transform: none !important; opacity: 0 !important; pointer-events: none !important; } #' + token + ' { display: none !important; } ' + selector + ' + #' + token + ' { display: contents !important; }';
+            // Keep Chromium rendering the guest; zero opacity can stall CDP screenshots.
+            style.textContent = selector + ' { transform: none !important; opacity: 0.001 !important; pointer-events: none !important; } #' + token + ' { display: none !important; } ' + selector + ' + #' + token + ' { display: contents !important; }';
             let active = true;
             const cleanup = () => {
               active = false;
@@ -118,4 +123,6 @@ export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) =>
     tabId,
     wc,
     Effect.tryPromise((_signal) => wc.capturePage()),
+    "data-preview-tab",
+    1_000,
   );

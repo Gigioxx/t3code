@@ -8,6 +8,7 @@ import {
   DesktopBrowserEvent,
   type DesktopBrowserEvent as DesktopBrowserEventType,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
@@ -102,7 +103,9 @@ export const make = Effect.gen(function* () {
                 Effect.tryPromise((_signal) => debuggee.sendCommand(method, params)),
                 "data-preview-server-tab",
               ),
-            );
+            ).catch((error: unknown) => {
+              throw Cause.isUnknownError(error) ? error.cause : error;
+            });
           }
           return sendPageCommand(webContents, debuggee, method, params);
         },
