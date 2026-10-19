@@ -1,3 +1,4 @@
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -30,8 +31,12 @@ export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
         if (scaled !== true) return yield* unscaledCapture;
         const frozen = yield* Effect.tryPromise((_signal) => wc.capturePage());
         const token = `preview-capture-${++captureSequence}`;
+        // The renderer checks delayed IPC expiry outside the Effect runtime.
+        const deadline = (yield* Clock.Clock.defaultValue().currentTimeMillis) + 5_000;
         return yield* Effect.tryPromise((_signal) =>
           host.executeJavaScript(`(async () => {
+            const token = ${encodeString(token)};
+            if (globalThis[token] || Date.now() >= ${deadline}) throw new Error("Preview capture expired");
             const view = document.querySelector("webview[data-preview-tab=" + CSS.escape(${encodeString(tabId)}) + "]");
             if (!view || view.getWebContentsId() !== ${wc.id}) throw new Error("Preview guest detached before capture");
             const frozen = document.createElement("img");
@@ -42,23 +47,36 @@ export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
             frozen.style.pointerEvents = "none";
             frozen.style.maxWidth = "none";
             const holder = document.createElement("span");
-            holder.id = ${encodeString(token)};
+            holder.id = token;
             holder.style.display = "contents";
             const style = document.createElement("style");
-            style.textContent = 'webview[data-preview-tab="' + CSS.escape(view.dataset.previewTab) + '"] { transform: none !important; opacity: 0 !important; pointer-events: none !important; }';
+            const selector = 'webview[data-preview-capture="' + token + '"]';
+            style.textContent = selector + ' { transform: none !important; opacity: 0 !important; pointer-events: none !important; } #' + token + ' { display: none !important; } ' + selector + ' + #' + token + ' { display: contents !important; }';
+            let active = true;
+            const cleanup = () => {
+              active = false;
+              holder.remove();
+              if (view.dataset.previewCapture === token) delete view.dataset.previewCapture;
+            };
+            globalThis[token] = cleanup;
+            // Recover without main-process IPC, including a decode that settles after cancellation.
+            setTimeout(() => {
+              cleanup();
+              delete globalThis[token];
+            }, Math.max(0, ${deadline} - Date.now()));
+            view.dataset.previewCapture = token;
             holder.append(frozen);
             view.after(holder);
             await frozen.decode();
-            if (holder.isConnected && view.isConnected) holder.append(style);
+            if (!active || !holder.isConnected || !view.isConnected || view.getWebContentsId() !== ${wc.id}) {
+              cleanup();
+              throw new Error("Preview guest detached during capture");
+            }
+            holder.append(style);
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            if (!active) throw new Error("Preview capture expired");
           })()`),
         ).pipe(
-          Effect.andThen(
-            Effect.tryPromise((_signal) =>
-              host.executeJavaScript(
-                "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
-              ),
-            ),
-          ),
           Effect.andThen(capture),
           Effect.ensuring(
             Effect.suspend(() =>
@@ -66,9 +84,17 @@ export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) => {
                 ? Effect.void
                 : Effect.tryPromise((_signal) =>
                     host.executeJavaScript(
-                      `document.getElementById(${encodeString(token)})?.remove()`,
+                      `(() => {
+                        const token = ${encodeString(token)};
+                        if (globalThis[token]) globalThis[token]();
+                        else {
+                          // Cancel setup even if its IPC arrives after this cleanup.
+                          globalThis[token] = () => {};
+                          setTimeout(() => { delete globalThis[token]; }, 5_000);
+                        }
+                      })()`,
                     ),
-                  ).pipe(Effect.timeout("1 second"), Effect.ignore),
+                  ).pipe(Effect.retry({ times: 1 }), Effect.timeout("1 second"), Effect.ignore),
             ),
           ),
         );
