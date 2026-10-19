@@ -138,17 +138,30 @@ it.each([
   ["has not started", []],
   ["is pending", [{ runAttemptId: activeAttemptId, status: "pending" }]],
   ["has completed", [{ runAttemptId: activeAttemptId, status: "completed" }]],
-])("queues an automatic message when the active run's provider turn %s", (_, providerTurns) => {
+  [
+    "belongs to a previous attempt",
+    [{ runAttemptId: RunAttemptId.make("previous-attempt"), status: "running" }],
+  ],
+])("queues only automatic delivery when the active run's provider turn %s", (_, providerTurns) => {
+  const projection = {
+    ...dispatchProjection(baseCapabilities),
+    providerTurns,
+  } as unknown as OrchestrationV2ThreadProjection;
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(projection, { type: "start_immediately" }, "auto"),
+    { type: "queue_after_active" },
+  );
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(projection, { type: "start_immediately" }, "steer"),
+    { type: "steer_active", targetRunId: activeRunId },
+  );
   assert.deepEqual(
     CommandPolicy.resolveMessageDispatchIntent(
-      {
-        ...dispatchProjection(baseCapabilities),
-        providerTurns,
-      } as unknown as OrchestrationV2ThreadProjection,
+      projection,
       { type: "start_immediately" },
-      "auto",
+      "restart",
     ),
-    { type: "queue_after_active" },
+    { type: "restart_active", targetRunId: activeRunId },
   );
 });
 
