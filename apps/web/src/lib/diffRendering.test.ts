@@ -1,4 +1,4 @@
-import { hydratePartialDiff } from "@pierre/diffs";
+import { hydratePartialDiff, VirtualizedFileDiff, Virtualizer } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveDiffReviewPosition } from "../reviewCommentContext";
 import {
@@ -6,11 +6,61 @@ import {
   buildFileDiffIdentityKey,
   buildFileDiffRenderKey,
   buildPatchCacheKey,
+  captureDiffScrollAnchor,
+  resolveDiffScrollAnchorTop,
+  DIFF_HEADER_HEIGHT,
   getDiffLineStat,
   getRenderablePatch,
   resolveFileDiffPath,
   resolveFileDiffPreviousPath,
 } from "./diffRendering";
+
+it("keeps a visible diff line and its offset through remounts with different virtual heights", () => {
+  const patch = getRenderablePatch(
+    [
+      "diff --git a/file-19.ts b/file-19.ts",
+      "--- /dev/null",
+      "+++ b/file-19.ts",
+      "@@ -0,0 +1,800 @@",
+      ...Array.from({ length: 800 }, (_, index) => `+const line${index} = "${"x".repeat(100)}";`),
+    ].join("\n"),
+  );
+  if (patch?.kind !== "files") throw new Error("Expected a file diff");
+  const fileDiff = patch.files[0]!;
+  const createInstance = (lineHeight: number) =>
+    new VirtualizedFileDiff({ diffStyle: "split", overflow: "wrap" }, new Virtualizer(), {
+      lineHeight,
+      diffHeaderHeight: DIFF_HEADER_HEIGHT,
+    });
+  let instance = createInstance(20);
+  let fileTop = 60_000;
+  instance.updateCodeViewLayout(fileDiff, fileTop);
+  const line = instance.getLinePosition(432, "additions")!;
+  let scrollTop = fileTop + line.top - DIFF_HEADER_HEIGHT - 13;
+  const viewer = {
+    getScrollTop: () => scrollTop,
+    getHeight: () => 600,
+    getTopForItem: (id: string) => (id === "file-19.ts" ? fileTop : undefined),
+    getRenderedItems: () => [{ id: "file-19.ts", instance }],
+  };
+  const saved = captureDiffScrollAnchor(viewer)!;
+  expect(saved).toEqual({
+    type: "line",
+    id: "file-19.ts",
+    lineNumber: 432,
+    side: "additions",
+    align: "start",
+    offset: 13,
+  });
+  for (const lineHeight of [40, 30, 20]) {
+    // A remount loses measured row heights, and files above the anchor get new estimates.
+    instance = createInstance(lineHeight);
+    fileTop += 2_500;
+    instance.updateCodeViewLayout(fileDiff, fileTop);
+    scrollTop = resolveDiffScrollAnchorTop(viewer, saved)!;
+    expect(captureDiffScrollAnchor(viewer)).toEqual(saved);
+  }
+});
 
 describe("buildPatchCacheKey", () => {
   it("normalizes outer whitespace before hashing", () => {

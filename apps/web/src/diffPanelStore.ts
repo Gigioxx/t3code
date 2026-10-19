@@ -3,6 +3,7 @@ import type { RunId, ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import type { DiffScrollAnchor } from "./lib/diffRendering";
 import { resolveStorage } from "./lib/storage";
 
 export type DiffPanelSelection =
@@ -12,6 +13,7 @@ export type DiffPanelSelection =
 
 export interface DiffPanelViewState {
   scrollTop: number;
+  scrollAnchor: DiffScrollAnchor | null;
   loadedFilePaths: ReadonlyArray<string>;
   // Selection identity survives remounts; a new request is distinct even when its counter resets.
   handledReveal: DiffPanelSelection | null;

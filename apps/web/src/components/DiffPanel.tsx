@@ -41,6 +41,9 @@ import { useStableCallback } from "../hooks/useStableCallback";
 import {
   buildFileDiffContentVersion,
   buildFileDiffIdentityKey,
+  captureDiffScrollAnchor,
+  resolveDiffScrollAnchorTop,
+  type DiffScrollAnchor,
   getDiffCollapseIconClassName,
   getDiffLineStat,
   getRenderablePatch,
@@ -125,7 +128,8 @@ interface DiffScrollSession {
   viewerKey: string;
   restoreFilePaths: ReadonlySet<string>;
   initialized: boolean;
-  pending: { fileKey: string; offset: number } | null;
+  captureFrame: number | null;
+  pending: DiffScrollAnchor | null;
   state: DiffPanelViewState;
 }
 
@@ -558,15 +562,19 @@ export default function DiffPanel({
       viewerKey,
       restoreFilePaths: new Set(saved?.loadedFilePaths),
       initialized: false,
+      captureFrame: null,
       pending: null,
       state: {
         scrollTop: saved?.scrollTop ?? 0,
+        scrollAnchor: saved?.scrollAnchor ?? null,
         loadedFilePaths: saved?.loadedFilePaths ?? [],
         handledReveal: saved?.handledReveal ?? null,
       },
     };
     scrollSessionRef.current = session;
     return () => {
+      if (session.captureFrame !== null) cancelAnimationFrame(session.captureFrame);
+      if (scrollSessionRef.current === session) scrollSessionRef.current = null;
       if (routeThreadRef && session.initialized && session.pending === null) {
         useDiffPanelStore
           .getState()
@@ -583,19 +591,34 @@ export default function DiffPanel({
     // Mount scroll events precede restoration; keep the saved position until its target is reached.
     if (!scrollSession.initialized) return;
     if (scrollSession.pending) {
-      const top = viewer.getTopForItem(scrollSession.pending.fileKey);
+      const top = resolveDiffScrollAnchorTop(viewer, scrollSession.pending);
       if (top === undefined || viewer.getHeight() === 0) return;
       const scrollHeight =
         viewer.getScrollHeight() + (viewer.getFooterElement()?.getBoundingClientRect().height ?? 0);
-      if (top - scrollSession.pending.offset > 0 && scrollHeight <= viewer.getHeight()) return;
-      const target = Math.max(
-        0,
-        Math.min(top - scrollSession.pending.offset, scrollHeight - viewer.getHeight()),
-      );
+      if (top > 0 && scrollHeight <= viewer.getHeight()) return;
+      const target = Math.max(0, Math.min(top, scrollHeight - viewer.getHeight()));
       if (Math.abs(scrollTop - target) > 1) return;
       scrollSession.pending = null;
     }
     scrollSession.state.scrollTop = scrollTop;
+    scrollSession.state.scrollAnchor = captureDiffScrollAnchor(viewer);
+  };
+
+  const scheduleDiffScrollCapture: NonNullable<
+    ComponentProps<typeof AnnotatableCodeView>["onScroll"]
+  > = (scrollTop, viewer) => {
+    rememberDiffScrollTop(scrollTop, viewer);
+    const session = scrollSessionRef.current;
+    if (!session || session.viewerKey !== viewerKey) return;
+    // Pierre queues virtual row measurement after notifying scroll listeners.
+    queueMicrotask(() => {
+      if (scrollSessionRef.current !== session || session.captureFrame !== null) return;
+      session.captureFrame = requestAnimationFrame(() => {
+        session.captureFrame = null;
+        if (scrollSessionRef.current === session)
+          rememberDiffScrollTop(viewer.getScrollTop(), viewer);
+      });
+    });
   };
 
   const cancelDiffScrollRestore = () => {
@@ -604,7 +627,10 @@ export default function DiffPanel({
     scrollSession.initialized = true;
     scrollSession.pending = null;
     const viewer = codeView?.getInstance();
-    if (viewer) scrollSession.state.scrollTop = viewer.getScrollTop();
+    if (viewer) {
+      scrollSession.state.scrollTop = viewer.getScrollTop();
+      scrollSession.state.scrollAnchor = captureDiffScrollAnchor(viewer);
+    }
   };
 
   useEffect(() => {
@@ -660,14 +686,18 @@ export default function DiffPanel({
     scrollSession.state.loadedFilePaths = lazySource ? [...readyFilePaths] : [];
     const freshReveal =
       selectedFilePath !== null && scrollSession.state.handledReveal !== diffSelection;
-    if (freshReveal) {
-      if (!selectedDiffFileKey) return;
+    if (freshReveal && !selectedDiffFileKey) {
+      if (isLoadingSelectedPatch || areFilePatchesPending) return;
+      // Some provider paths or whitespace-only files are absent from the rendered patch.
+      scrollSession.state.handledReveal = diffSelection;
+    }
+    if (freshReveal && selectedDiffFileKey) {
       if (collapsedDiffFileKeys.has(selectedDiffFileKey)) {
         unfoldDiffFile(selectedDiffFileKey);
         return;
       }
       scrollSession.state.handledReveal = diffSelection;
-      scrollSession.pending = { fileKey: selectedDiffFileKey, offset: 0 };
+      scrollSession.pending = { type: "item", id: selectedDiffFileKey, align: "start", offset: 0 };
     } else {
       if (scrollSession.initialized) return;
       // Sparse tree reveals must load alongside the prefix to recreate the saved layout.
@@ -685,17 +715,20 @@ export default function DiffPanel({
       }
       const firstFileKey = codeViewFiles[0]?.fileKey;
       if (!firstFileKey) return;
-      scrollSession.pending = { fileKey: firstFileKey, offset: -scrollSession.state.scrollTop };
+      const savedAnchor = scrollSession.state.scrollAnchor;
+      scrollSession.pending =
+        savedAnchor && codeViewFileKeys.includes(savedAnchor.id)
+          ? savedAnchor
+          : {
+              type: "item",
+              id: firstFileKey,
+              align: "start",
+              offset: -scrollSession.state.scrollTop,
+            };
     }
     scrollSession.initialized = true;
-    // A position target subtracts the sticky header; a first-item offset restores the exact pixel.
-    viewer.scrollTo({
-      type: "item",
-      id: scrollSession.pending.fileKey,
-      align: "start",
-      offset: scrollSession.pending.offset,
-      behavior: "instant",
-    });
+    // Line targets survive changes to estimated heights as wrapped virtual rows are measured.
+    viewer.scrollTo({ ...scrollSession.pending, behavior: "instant" });
     rememberDiffScrollTop(viewer.getScrollTop(), viewer);
   }, [
     codeView,
@@ -703,6 +736,8 @@ export default function DiffPanel({
     diffSelection,
     selectedFilePath,
     selectedDiffFileKey,
+    isLoadingSelectedPatch,
+    areFilePatchesPending,
     renderableFileEntries,
     collapsedDiffFileKeys,
     unfoldDiffFile,
@@ -710,6 +745,7 @@ export default function DiffPanel({
     requestFiles,
     readyFilePaths,
     codeViewFiles,
+    codeViewFileKeys,
     rememberDiffScrollTop,
   ]);
 
@@ -754,7 +790,10 @@ export default function DiffPanel({
   });
   const toggleDiffFileCollapse = () => {
     cancelDiffScrollRestore();
-    if (scrollSessionRef.current) scrollSessionRef.current.state.scrollTop = 0;
+    if (scrollSessionRef.current) {
+      scrollSessionRef.current.state.scrollTop = 0;
+      scrollSessionRef.current.state.scrollAnchor = null;
+    }
     setCodeViewRevision((current) => current + 1);
     setCollapsedDiffFiles((current) => {
       const currentKeys =
@@ -1219,7 +1258,7 @@ export default function DiffPanel({
                   <AnnotatableCodeView
                     key={collapseScopeKey ?? reviewSectionId}
                     viewerRef={setCodeView}
-                    onScroll={rememberDiffScrollTop}
+                    onScroll={scheduleDiffScrollCapture}
                     codeViewKey={viewerKey}
                     className="h-full min-h-0 overflow-auto"
                     files={codeViewFiles}
