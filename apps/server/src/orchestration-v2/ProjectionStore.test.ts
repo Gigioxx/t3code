@@ -4295,6 +4295,14 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           thread?.pendingRuntimeRequest?.id ?? null,
           status === "completed" || status === "rolled_back" ? null : "secret:b",
         );
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        const memoryShell = ProjectionStore.threadShellFromProjection(projection);
+        assert.deepEqual(
+          [thread?.pendingRuntimeRequest?.blocking, memoryShell.pendingRuntimeRequest?.blocking],
+          status === "completed" || status === "rolled_back"
+            ? [undefined, undefined]
+            : [true, true],
+        );
       }
     }),
   );
