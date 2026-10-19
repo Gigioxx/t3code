@@ -50,18 +50,18 @@ export function createTerminalEnvironmentAtoms<R, E>(
     attach: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:terminal:attach",
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) => {
-        let subscribed = false;
-        return Stream.suspend(() =>
-          subscribeDynamic(WS_METHODS.terminalAttach, () =>
-            Effect.sync(() => (subscribed ? { ...input, resume: true } : input)),
-          ).pipe(
-            Stream.onFirst(() =>
-              Effect.sync(() => {
-                subscribed = true;
-              }),
-            ),
-            Stream.scan(nextTerminalAttachSeedState, applyTerminalAttachStreamEvent),
+        // Only a resubscription that already saw a reply asks the server to resume, so a
+        // first attach lost before any reply is retried unchanged and still opens.
+        let replied = false;
+        return subscribeDynamic(WS_METHODS.terminalAttach, () =>
+          Effect.sync(() => (replied ? { ...input, resume: true } : input)),
+        ).pipe(
+          Stream.onFirst(() =>
+            Effect.sync(() => {
+              replied = true;
+            }),
           ),
+          Stream.scan(nextTerminalAttachSeedState, applyTerminalAttachStreamEvent),
         );
       },
     }),

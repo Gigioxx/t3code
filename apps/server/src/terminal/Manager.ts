@@ -1510,7 +1510,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     sessions: new Map(),
     killFibers: new Map(),
   });
-  // Distinguish explicit closes from sessions lost to a server restart.
+  // History files outlive close so a terminal can be reopened with its scrollback,
+  // so only memory can tell a resumed attach whether its session was closed here
+  // or lost to a server restart.
   const closedSessionKeys = new Set<string>();
   const threadLocks = yield* KeyedLock.make<string>();
   const terminalEventListeners = new Set<(event: TerminalEvent) => Effect.Effect<void>>();
@@ -1936,12 +1938,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
   const evictInactiveSessionsIfNeeded = Effect.fn("terminal.evictInactiveSessionsIfNeeded")(
     function* () {
-      yield* modifyManagerState((state) => {
+      const evicted = yield* modifyManagerState<ReadonlyArray<TerminalSessionState>>((state) => {
         const inactiveSessions = [...state.sessions.values()].filter(
           (session) => session.status !== "running",
         );
         if (inactiveSessions.length <= maxRetainedInactiveSessions) {
-          return [undefined, state] as const;
+          return [[], state];
         }
 
         inactiveSessions.sort(
@@ -1954,14 +1956,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const sessions = new Map(state.sessions);
 
         const toEvict = inactiveSessions.length - maxRetainedInactiveSessions;
-        for (const session of inactiveSessions.slice(0, toEvict)) {
-          const key = toSessionKey(session.threadId, session.terminalId);
-          sessions.delete(key);
-          closedSessionKeys.add(key);
+        const evicted = inactiveSessions.slice(0, toEvict);
+        for (const session of evicted) {
+          sessions.delete(toSessionKey(session.threadId, session.terminalId));
         }
 
-        return [undefined, { ...state, sessions }] as const;
+        return [evicted, { ...state, sessions }];
       });
+      for (const session of evicted) {
+        closedSessionKeys.add(toSessionKey(session.threadId, session.terminalId));
+      }
     },
   );
 
@@ -2362,7 +2366,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* flushPersist(threadId, terminalId);
 
     const removed = yield* modifyManagerState((state) => {
-      closedSessionKeys.add(key);
       if (!state.sessions.has(key)) {
         return [false, state] as const;
       }
@@ -2372,6 +2375,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     });
 
     if (removed) {
+      closedSessionKeys.add(key);
       yield* publishEvent({
         type: "closed",
         threadId,
@@ -2591,9 +2595,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       yield* modifyManagerState((state) => {
         const sessions = new Map(state.sessions);
         sessions.set(sessionKey, createdSession);
-        closedSessionKeys.delete(sessionKey);
         return [undefined, { ...state, sessions }] as const;
       });
+      closedSessionKeys.delete(sessionKey);
 
       yield* evictInactiveSessionsIfNeeded();
       yield* startSession(
@@ -2694,10 +2698,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const existing = yield* getSession(input.threadId, terminalId);
 
         if (Option.isNone(existing)) {
-          if (
-            input.resume === true &&
-            closedSessionKeys.has(toSessionKey(input.threadId, terminalId))
-          ) {
+          if (input.resume && closedSessionKeys.has(toSessionKey(input.threadId, terminalId))) {
             return null;
           }
           if (!input.cwd) {
@@ -2719,12 +2720,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const targetCols = input.cols ?? session.cols;
         const targetRows = input.rows ?? session.rows;
 
-        if (
-          input.resume !== true &&
-          !session.process &&
-          input.cwd &&
-          input.restartIfNotRunning === true
-        ) {
+        if (!input.resume && !session.process && input.cwd && input.restartIfNotRunning === true) {
           const resolvedInput = yield* resolveLaunchInputEnvironment({
             ...input,
             terminalId,
@@ -2779,6 +2775,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       };
     });
 
+  // A `null` initial snapshot means the terminal was closed in this process: the
+  // stream reports `closed` and stays subscribed so a later open reaches it.
   const streamSession = (
     input: TerminalObserveInput,
     initial: Effect.Effect<TerminalSessionSnapshot | null, TerminalError>,

@@ -52,7 +52,7 @@ export const TerminalAttachInput = Schema.Struct({
   env: Schema.optional(TerminalEnvSchema),
   providerInstanceId: Schema.optional(ProviderInstanceId),
   restartIfNotRunning: Schema.optional(Schema.Boolean),
-  // Resubscriptions preserve explicitly closed or exited terminals, but recover sessions lost to a server restart.
+  // Set on resubscription: never reopens a closed or exited terminal, only one lost to a server restart.
   resume: Schema.optional(Schema.Boolean),
 });
 export type TerminalAttachInput = typeof TerminalAttachInput.Type;
