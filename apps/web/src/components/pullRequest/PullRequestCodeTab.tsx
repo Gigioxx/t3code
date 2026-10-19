@@ -362,7 +362,7 @@ function PullRequestCodeTab({
     const before = registry.get(diffAtom);
     // oxlint-disable-next-line react/set-state-in-effect -- Record the cached result before forcing this page's fresh read.
     setRequestedPage({ key: requestKey, before });
-    registry.refresh(diffAtom);
+    if (before._tag !== "Initial") registry.refresh(diffAtom);
   }, [diffAtom, registry, requestKey, revalidating]);
 
   // Apply pages during render so a changed page never commits alongside its old descendants.
@@ -1304,9 +1304,27 @@ function PullRequestCodeTab({
       onSelectedCommitChange(null);
     }
   }, [commit, onSelectedCommitChange, selectedCommit]);
+  const diffError =
+    diffQuery.error !== null && loadedSlices.length > 0 ? (
+      <div
+        role="status"
+        className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground"
+      >
+        <span>The latest diff could not be loaded.</span>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={diffQuery.isPending}
+          onClick={() => diffQuery.refresh()}
+        >
+          Retry
+        </Button>
+      </div>
+    ) : null;
   const withToolbar = (body: ReactNode) => (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
+      {diffError}
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
         {body}
       </div>
@@ -1356,6 +1374,7 @@ function PullRequestCodeTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
+      {diffError}
       {orphanFiles.size > 0 ? (
         <div className="shrink-0 border-b border-border/60">
           <Collapsible open={orphansOpen} onOpenChange={setOrphansOpen}>
