@@ -11,7 +11,7 @@ import {
   extractMarkdownLinkHrefs,
   inlineCodeFilePathCandidate,
 } from "@t3tools/shared/markdownLinks";
-import { isAbsolutePath } from "@t3tools/shared/path";
+import { isAbsolutePath, resolveWorkspaceFilePath } from "@t3tools/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { AuthFilesystemReadScope, AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import {
@@ -195,6 +195,7 @@ import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { projectEnvironment } from "../state/projects";
+import { filesystemEnvironment } from "../state/filesystem";
 import {
   claimWorkspaceBasenameLookup,
   needsWorkspaceBasenameLookup,
@@ -2388,6 +2389,10 @@ function useChatMarkdownState({
   const searchProjectEntries = useAtomQueryRunner(projectEnvironment.searchEntries, {
     reportFailure: false,
   });
+  const getFilesystemMetadata = useAtomQueryRunner(filesystemEnvironment.getMetadata, {
+    reportFailure: false,
+    refresh: true,
+  });
   const openPreview = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
@@ -2611,8 +2616,10 @@ function useChatMarkdownState({
       openPreview,
     });
   };
-  const findWorkspaceBasenameMatch = async (workspaceRelativePath: string) => {
+  const findWorkspaceFileMatch = async (fileLinkMeta: MarkdownFileLinkMeta) => {
+    const workspaceRelativePath = fileLinkMeta.workspaceLookupPath;
     if (
+      !workspaceRelativePath ||
       !cwd ||
       environmentId === null ||
       !readEnvironmentScope(environmentId, AuthFilesystemReadScope)
@@ -2637,20 +2644,25 @@ function useChatMarkdownState({
     if (strippedPath === null) {
       return pickWorkspaceBasenameMatch(workspaceRelativePath, result.value.entries);
     }
-    return pickStrippedWorkspaceMatch(
-      workspaceRelativePath,
-      strippedPath,
-      cwd,
-      result.value.entries,
-    );
+    const match = pickStrippedWorkspaceMatch(strippedPath, cwd, result.value.entries);
+    if (match === null) return null;
+    // Search can be truncated or still scanning, so it cannot rule out the
+    // literal path. Check the host before redirecting to the stripped match.
+    const metadata = await getFilesystemMetadata({
+      environmentId,
+      input: { paths: [resolveWorkspaceFilePath(workspaceRelativePath, cwd)] },
+    });
+    return metadata._tag === "Success" && metadata.value.entries[0] === null ? match : null;
   };
-  const openFileInPanel = (panelPath: string, line: number | undefined) => {
+  const openFileInPanel = (fileLinkMeta: MarkdownFileLinkMeta, panelPath: string) => {
     if (!threadRef) return;
     // Claimed on every open so a synchronous one supersedes a lookup already
     // in flight.
     const isLatestLookup = claimWorkspaceBasenameLookup();
-    const openAt = (path: string) => useRightPanelStore.getState().openFile(threadRef, path, line);
+    const openAt = (path: string) =>
+      useRightPanelStore.getState().openFile(threadRef, path, fileLinkMeta.line);
     if (
+      fileLinkMeta.workspaceLookupPath === null ||
       !cwd ||
       (!needsWorkspaceBasenameLookup(panelPath) &&
         stripRepeatedWorkspacePrefix(panelPath, cwd) === null)
@@ -2659,16 +2671,13 @@ function useChatMarkdownState({
       return;
     }
     void (async () => {
-      const match = await findWorkspaceBasenameMatch(panelPath);
+      const match = await findWorkspaceFileMatch(fileLinkMeta);
       if (!isLatestLookup()) return;
       openAt(match ?? panelPath);
     })();
   };
   const revealMarkdownFileInFileManager = async (fileLinkMeta: MarkdownFileLinkMeta) => {
-    const workspaceRelativePath = fileLinkMeta.workspaceRelativePath;
-    const match = workspaceRelativePath
-      ? await findWorkspaceBasenameMatch(workspaceRelativePath)
-      : null;
+    const match = await findWorkspaceFileMatch(fileLinkMeta);
     const filePath = match && cwd ? resolvePathLinkTarget(match, cwd) : fileLinkMeta.filePath;
     return revealFileInFileManager(filePath);
   };
@@ -2707,7 +2716,7 @@ function useChatMarkdownState({
         theme={resolvedTheme}
         threadRef={threadRef}
         {...(canUseShellActions ? { onOpen: openInPreferredEditor } : {})}
-        onOpenInPanel={openFileInPanel}
+        onOpenInPanel={(path) => openFileInPanel(fileLinkMeta, path)}
         onOpenMedia={
           threadRef && canPreviewMedia
             ? () => openMarkdownMedia(mediaPath, fileLinkMeta.filePath)

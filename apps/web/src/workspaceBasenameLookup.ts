@@ -1,4 +1,4 @@
-import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+import { isAbsolutePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 
 export const WORKSPACE_BASENAME_LOOKUP_LIMIT = 25;
 
@@ -49,12 +49,9 @@ export function pickWorkspaceBasenameMatch(
   return foldedMatches.length === 1 ? (foldedMatches[0]?.path ?? null) : null;
 }
 
-/**
- * Agents echo git paths relative to the repository root, so in a project that
- * is a subfolder of its repository `physics/notes/a.md` repeats the project's
- * own folder. Returns the path with that repeated prefix removed, if any.
- */
+// Repository-relative paths can repeat the project's suffix in subfolder projects.
 export function stripRepeatedWorkspacePrefix(relativePath: string, cwd: string): string | null {
+  if (isAbsolutePath(relativePath)) return null;
   const pathSegments = relativePath.split(/[\\/]+/);
   const cwdSegments = cwd.split(/[\\/]+/).filter(Boolean);
   const fold = isWindowsAbsolutePath(cwd)
@@ -63,19 +60,13 @@ export function stripRepeatedWorkspacePrefix(relativePath: string, cwd: string):
   for (let count = Math.min(cwdSegments.length, pathSegments.length - 1); count > 0; count--) {
     const prefix = cwdSegments.slice(-count);
     if (prefix.every((segment, index) => fold(segment) === fold(pathSegments[index]))) {
-      return pathSegments.slice(count).join("/");
+      return pathSegments.slice(count).join("/") || null;
     }
   }
   return null;
 }
 
-/**
- * Resolves a stripped path against index entries. A real child folder named
- * like the project keeps the literal path, so this returns null when the
- * literal path is indexed too.
- */
 export function pickStrippedWorkspaceMatch(
-  literalPath: string,
   strippedPath: string,
   cwd: string,
   entries: ReadonlyArray<WorkspaceEntryCandidate>,
@@ -85,9 +76,6 @@ export function pickStrippedWorkspaceMatch(
     const normalized = path.replaceAll("\\", "/");
     return caseInsensitive ? normalized.toLowerCase() : normalized;
   };
-  const pathsByKey = new Map(
-    entries.filter((entry) => entry.kind === "file").map((entry) => [key(entry.path), entry.path]),
-  );
-  if (pathsByKey.has(key(literalPath))) return null;
-  return pathsByKey.get(key(strippedPath)) ?? null;
+  const files = entries.filter((entry) => entry.kind === "file");
+  return files.find((entry) => key(entry.path) === key(strippedPath))?.path ?? null;
 }
