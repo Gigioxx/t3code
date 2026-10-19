@@ -89,7 +89,6 @@ function resolveThreadAwarenessPhaseV2(
   const runStatus = thread.activityRunStatus ?? thread.status;
   if (
     thread.pendingRuntimeRequest?.kind === "user_input" &&
-    // Async questions do not block a run that is still working.
     (thread.pendingRuntimeRequest.blocking !== false ||
       !(runStatus === "preparing" || runStatus === "starting" || runStatus === "running"))
   ) {
