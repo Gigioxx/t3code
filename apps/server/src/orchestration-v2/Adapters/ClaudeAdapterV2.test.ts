@@ -4546,49 +4546,69 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect("reuses the CLI permission mode when auto falls back to default", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeWakeHarness;
-      const turnInput = {
-        threadId: harness.threadId,
-        providerThread: harness.providerThread,
-        now: yield* DateTime.now,
-        attachments: [],
-        runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-          ...CLAUDE_TEST_RUNTIME_POLICY,
-          runtimeMode: "auto",
-        }),
-      };
-      yield* harness.runtime.startTurn(
-        makeClaudeTestTurnInput({
-          ...turnInput,
-          attemptId: RunAttemptId.make("attempt-claude-auto-fallback-1"),
-          text: "Hello.",
-        }),
-      );
-      const openedOptions = harness.getOpenedOptions();
-      assert.equal(openedOptions?.permissionMode, "auto");
-      yield* harness.offerAndWait(claudeSdkFrame({ ...wakeTurnInit, permissionMode: "default" }));
-      yield* Queue.offer(harness.sdkMessages, turnOneResult);
-      yield* Queue.take(harness.terminalReceipts);
+  it.effect.each(["claude-haiku-4-5-20251001", "claude-sonnet-4-6"])(
+    "renegotiates auto only when switching API models after fallback to default: %s",
+    (nextModel) =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions({ freshQueueOnReopen: true });
+        const modelSelection = {
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          model: "claude-haiku-4-5-20251001",
+        };
+        const turnInput = {
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attachments: [],
+          modelSelection,
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+            ...CLAUDE_TEST_RUNTIME_POLICY,
+            runtimeMode: "auto",
+          }),
+        };
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            ...turnInput,
+            attemptId: RunAttemptId.make("attempt-claude-auto-fallback-1"),
+            text: "Hello.",
+          }),
+        );
+        const openedOptions = harness.getOpenedOptions();
+        assert.equal(openedOptions?.permissionMode, "auto");
+        yield* harness.offerAndWait(claudeSdkFrame({ ...wakeTurnInit, permissionMode: "default" }));
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
 
-      yield* harness.runtime.startTurn(
-        makeClaudeTestTurnInput({
-          ...turnInput,
-          attemptId: RunAttemptId.make("attempt-claude-auto-fallback-2"),
-          providerTurnOrdinal: 2,
-          text: "Continue.",
-        }),
-      );
-      assert.strictEqual(harness.getOpenedOptions(), openedOptions);
-      assert.lengthOf(harness.offeredMessages, 2);
-      assert.deepEqual(harness.permissionModeChanges, []);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            ...turnInput,
+            modelSelection: { ...modelSelection, model: nextModel },
+            attemptId: RunAttemptId.make("attempt-claude-auto-fallback-2"),
+            providerTurnOrdinal: 2,
+            text: "Continue.",
+          }),
+        );
+        if (nextModel === modelSelection.model) {
+          assert.strictEqual(harness.getOpenedOptions(), openedOptions);
+          assert.lengthOf(harness.processQueues, 1);
+        } else {
+          const resumedOptions = harness.getOpenedOptions();
+          assert.notStrictEqual(resumedOptions, openedOptions);
+          assert.equal(resumedOptions?.model, nextModel);
+          assert.equal(resumedOptions?.resume, WAKE_NATIVE_SESSION);
+          assert.isUndefined(resumedOptions?.sessionId);
+          assert.equal(resumedOptions?.permissionMode, "auto");
+          assert.lengthOf(harness.processQueues, 2);
+        }
+        assert.lengthOf(harness.offeredMessages, 2);
+        assert.deepEqual(harness.permissionModeChanges, []);
+        assert.deepEqual(harness.liveSelectionChanges, []);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
       ),
-    ),
   );
 
   it.effect("preserves typed Claude plans and todos through generic tool completion", () =>
