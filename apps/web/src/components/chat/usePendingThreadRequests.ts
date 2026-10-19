@@ -108,7 +108,6 @@ function makePendingCustomAnswerSetter(input: {
 export function usePendingThreadRequests(input: {
   readonly environmentId: EnvironmentId;
   readonly activeThreadId: ThreadId | null;
-  // The effect that prunes stale question drafts re-runs when this object changes.
   readonly activeThread: { readonly id: ThreadId } | undefined;
   readonly serverProjection: OrchestrationV2ThreadProjection | null;
   readonly supportsQuestionAttachments: boolean;
@@ -144,12 +143,13 @@ export function usePendingThreadRequests(input: {
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     RuntimeRequestId[]
   >([]);
-  const pendingUserInputAnswersByRequestId = usePendingUserInputAnswers();
-  const pendingUserInputQuestionIndexByRequestId = usePendingUserInputQuestionIndex();
   const setPendingUserInputAnswersByRequestId = usePendingUserInputAnswers.setState;
   const setPendingUserInputQuestionIndexByRequestId = usePendingUserInputQuestionIndex.setState;
+  const projectedThreadId = serverProjection?.thread.id;
   const pendingRequests =
-    serverProjection === null ? NO_PENDING_REQUESTS : derivePendingThreadRequests(serverProjection);
+    serverProjection !== null && serverProjection.thread.id === activeThreadId
+      ? derivePendingThreadRequests(serverProjection)
+      : NO_PENDING_REQUESTS;
   // The projection changes on every streamed event, so shared empties keep the
   // composer and approval panel from re-rendering while nothing is pending.
   const pendingApprovals =
@@ -166,8 +166,12 @@ export function usePendingThreadRequests(input: {
     activeThreadId,
     activePendingUserInput?.requestId,
   );
-  const activePendingAnswerDrafts =
-    pendingUserInputAnswersByRequestId[activePendingRequestKey] ?? EMPTY_PENDING_USER_INPUT_ANSWERS;
+  const activePendingAnswerDrafts = usePendingUserInputAnswers(
+    (state) => state[activePendingRequestKey] ?? EMPTY_PENDING_USER_INPUT_ANSWERS,
+  );
+  const activePendingQuestionIndex = usePendingUserInputQuestionIndex(
+    (state) => state[activePendingRequestKey] ?? 0,
+  );
   useLayoutEffect(() => {
     if (!activePendingUserInput) return;
     usePendingUserInputAnswers.setState((existing) => {
@@ -213,7 +217,8 @@ export function usePendingThreadRequests(input: {
     ),
   );
   useEffect(() => {
-    if (!activeThread) return;
+    // A thread shell can arrive before its requests; missing detail is not resolution.
+    if (!activeThread || projectedThreadId !== activeThread.id) return;
     const questionThread = activeThread;
     const currentRequests = pendingUserInputs;
     const pendingRequestIds = currentRequests.map((request) => request.requestId);
@@ -248,7 +253,7 @@ export function usePendingThreadRequests(input: {
       if (key.startsWith(prefix) && !retained.has(DraftId.make(key)))
         clearQuestionAttachmentDraft(DraftId.make(key));
     }
-  }, [environmentId, activeThread, pendingUserInputs]);
+  }, [environmentId, activeThread, projectedThreadId, pendingUserInputs]);
   const activePendingDraftAnswers =
     !activePendingUserInput || !activeThreadId
       ? EMPTY_PENDING_USER_INPUT_ANSWERS
@@ -265,7 +270,7 @@ export function usePendingThreadRequests(input: {
             return [
               question.id,
               {
-                ...pendingUserInputAnswersByRequestId[activePendingRequestKey]?.[question.id],
+                ...activePendingAnswerDrafts[question.id],
                 attachmentCount: attachments.length,
                 attachmentsBlocked:
                   (attachments.length > 0 && !supportsQuestionAttachments) ||
@@ -275,9 +280,6 @@ export function usePendingThreadRequests(input: {
             ];
           }),
         );
-  const activePendingQuestionIndex = activePendingUserInput
-    ? (pendingUserInputQuestionIndexByRequestId[activePendingRequestKey] ?? 0)
-    : 0;
   const activePendingProgress = activePendingUserInput
     ? derivePendingUserInputProgress(
         activePendingUserInput.questions,
@@ -434,8 +436,7 @@ export function usePendingThreadRequests(input: {
     }
     // The option replaces the custom answer. Anything typed there is the
     // user's text, so it goes back to the thread draft instead of vanishing.
-    const displacedAnswer =
-      pendingUserInputAnswersByRequestId[activePendingRequestKey]?.[questionId]?.customAnswer;
+    const displacedAnswer = activePendingAnswerDrafts[questionId]?.customAnswer;
     const currentPrompt =
       useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
     const nextPrompt = carryDisplacedCustomAnswerIntoPrompt(currentPrompt, displacedAnswer);
