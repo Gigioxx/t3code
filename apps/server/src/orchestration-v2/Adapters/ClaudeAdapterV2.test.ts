@@ -4549,21 +4549,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect("reuses the CLI permission mode when auto falls back to default", () =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
-      const now = yield* DateTime.now;
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        ...CLAUDE_TEST_RUNTIME_POLICY,
-        runtimeMode: "auto",
-      });
-      const turnInput = makeClaudeTestTurnInput({
+      const turnInput = {
         threadId: harness.threadId,
         providerThread: harness.providerThread,
-        now,
-        attemptId: RunAttemptId.make("attempt-claude-auto-fallback-1"),
-        text: "Hello.",
+        now: yield* DateTime.now,
         attachments: [],
-        runtimePolicy,
-      });
-      yield* harness.runtime.startTurn(turnInput);
+        runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          ...CLAUDE_TEST_RUNTIME_POLICY,
+          runtimeMode: "auto",
+        }),
+      };
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          ...turnInput,
+          attemptId: RunAttemptId.make("attempt-claude-auto-fallback-1"),
+          text: "Hello.",
+        }),
+      );
       const openedOptions = harness.getOpenedOptions();
       assert.equal(openedOptions?.permissionMode, "auto");
       yield* harness.offerAndWait(claudeSdkFrame({ ...wakeTurnInit, permissionMode: "default" }));
@@ -4572,14 +4574,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
       yield* harness.runtime.startTurn(
         makeClaudeTestTurnInput({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          now,
+          ...turnInput,
           attemptId: RunAttemptId.make("attempt-claude-auto-fallback-2"),
           providerTurnOrdinal: 2,
           text: "Continue.",
-          attachments: [],
-          runtimePolicy,
         }),
       );
       assert.strictEqual(harness.getOpenedOptions(), openedOptions);
