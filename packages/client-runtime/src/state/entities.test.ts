@@ -28,6 +28,7 @@ import { v2Projection, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { deriveLatestThreadRun, deriveThreadRuntime } from "./threadExecution.ts";
 import { isThreadWorking } from "./threadInbox.ts";
 import { derivePendingThreadRequests } from "./threadRequests.ts";
+import { canSnooze } from "./threadSettled.ts";
 
 const environmentId = EnvironmentId.make("environment-v2");
 
@@ -129,6 +130,7 @@ describe("V2 client presentation", () => {
     const active = presentThreadShell(environmentId, running);
     expect(active.hasPendingUserInput).toBe(false);
     expect(isThreadWorking(active)).toBe(true);
+    expect(canSnooze(active, { now: "2026-06-20T00:05:00.000Z" })).toBe(false);
 
     const completed = presentThreadShell(environmentId, {
       ...running,
