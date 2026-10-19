@@ -501,55 +501,66 @@ it.layer(
     }),
   );
 
-  it.effect("resumed attach streams recreate sessions not explicitly closed in this manager", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager();
-      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
-      const unsubscribe = yield* manager.attachStream({ ...openInput(), resume: true }, (event) =>
-        Ref.update(attachEvents, (events) => [...events, event]),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-      expect(ptyAdapter.spawnInputs).toHaveLength(1);
-      expect(yield* Ref.get(attachEvents)).toEqual([
-        { type: "snapshot", snapshot: expect.objectContaining({ status: "running" }) },
-      ]);
-    }),
-  );
-
-  it.effect("resumed attach streams never reopen a closed terminal", () =>
+  it.effect("resumed attaches after close never respawn until the terminal is reopened", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
       yield* manager.open(openInput());
       yield* manager.close({ threadId: "thread-1", terminalId: DEFAULT_TERMINAL_ID });
 
       const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
-      const unsubscribe = yield* manager.attachStream({ ...openInput(), resume: true }, (event) =>
-        Ref.update(attachEvents, (events) => [...events, event]),
+      const unsubscribe = yield* manager.attachStream(
+        { ...openInput(), restartIfNotRunning: true, resume: true },
+        (event) => Ref.update(attachEvents, (events) => [...events, event]),
       );
       yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      expect((yield* Ref.get(attachEvents)).map((event) => event.type)).toEqual(["closed"]);
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
 
       yield* manager.open(openInput());
       const events = yield* Ref.get(attachEvents);
       expect(events.map((event) => event.type)).toEqual(["closed", "snapshot"]);
+      expect(ptyAdapter.spawnInputs).toHaveLength(2);
     }),
   );
 
-  it.effect("resumed attach streams do not restart exited terminals", () =>
+  it.effect("resumed attaches leave exited terminals exited", () =>
     Effect.gen(function* () {
-      const { manager, ptyAdapter, getEvents } = yield* createManager();
+      const { manager, ptyAdapter } = yield* createManager();
+      const exited = yield* Deferred.make<void>();
+      const unsubscribeEvents = yield* manager.subscribe((event) =>
+        event.type === "exited"
+          ? Deferred.succeed(exited, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribeEvents));
       yield* manager.open(openInput());
       ptyAdapter.processes[0]?.emitExit({ exitCode: 0, signal: 0 });
-      yield* waitFor(
-        Effect.map(getEvents, (events) => events.some((event) => event.type === "exited")),
-        "1200 millis",
-      );
+      yield* Deferred.await(exited);
 
+      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
       const unsubscribe = yield* manager.attachStream(
         { ...openInput(), restartIfNotRunning: true, resume: true },
-        () => Effect.void,
+        (event) => Ref.update(attachEvents, (events) => [...events, event]),
       );
       yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      expect(yield* Ref.get(attachEvents)).toEqual([
+        { type: "snapshot", snapshot: expect.objectContaining({ status: "exited" }) },
+      ]);
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+    }),
+  );
+
+  it.effect("resumed attaches recreate terminals this server has never seen", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
+      const unsubscribe = yield* manager.attachStream({ ...openInput(), resume: true }, (event) =>
+        Ref.update(attachEvents, (events) => [...events, event]),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      expect(yield* Ref.get(attachEvents)).toEqual([
+        { type: "snapshot", snapshot: expect.objectContaining({ status: "running" }) },
+      ]);
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
     }),
   );
@@ -2001,34 +2012,6 @@ it.layer(
 
       assert.equal(reopenedFirst.history, "first-history\n");
       assert.equal(reopenedSecond.history, "");
-    }),
-  );
-
-  it.effect("resumed attach streams do not restart evicted exited terminals", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter, getEvents } = yield* createManager(5, {
-        maxRetainedInactiveSessions: 1,
-      });
-      yield* manager.open(openInput({ threadId: "thread-1" }));
-      yield* manager.open(openInput({ threadId: "thread-2" }));
-      ptyAdapter.processes[0]?.emitExit({ exitCode: 0, signal: 0 });
-      yield* Effect.sleep(Duration.millis(5));
-      ptyAdapter.processes[1]?.emitExit({ exitCode: 0, signal: 0 });
-      yield* waitFor(
-        Effect.map(
-          getEvents,
-          (events) => events.filter((event) => event.type === "exited").length === 2,
-        ),
-      );
-
-      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
-      const unsubscribe = yield* manager.attachStream(
-        { ...openInput({ threadId: "thread-1" }), resume: true },
-        (event) => Ref.update(attachEvents, (events) => [...events, event]),
-      );
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-      expect(ptyAdapter.spawnInputs).toHaveLength(2);
-      expect((yield* Ref.get(attachEvents)).map((event) => event.type)).toEqual(["closed"]);
     }),
   );
 

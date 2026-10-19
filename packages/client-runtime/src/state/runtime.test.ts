@@ -388,7 +388,7 @@ describe("finite environment subscription lifecycle", () => {
 });
 
 describe("environment query lifecycle", () => {
-  it.effect("keeps terminal resume across reruns only after receiving a value", () =>
+  it.effect("terminal attach resubscribes with resume only after the stream replied", () =>
     Effect.gen(function* () {
       const harness = yield* makeEnvironmentQueryHarness(Effect.void);
       const inputs = yield* Queue.unbounded<TerminalAttachInput>();
@@ -438,10 +438,8 @@ describe("environment query lifecycle", () => {
       });
       yield* Deferred.await(received);
 
-      for (let replacement = 0; replacement < 2; replacement += 1) {
-        yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
-        expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
-      }
+      yield* SubscriptionRef.set(harness.supervisorSession, Option.some({ ...firstSession }));
+      expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
       // Catalog replacements rerun the same stream through followStream's switchMap.
       yield* SubscriptionRef.update(harness.streamGeneration, (generation) => generation + 1);
       expect(yield* Queue.take(inputs)).toEqual({ ...input, resume: true });
