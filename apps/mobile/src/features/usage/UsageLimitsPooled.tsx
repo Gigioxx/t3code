@@ -10,7 +10,6 @@ import {
   displayLimitWindows,
   formatResetsIn,
   paceRemainingPercent,
-  planWeight,
   remainingPercent,
   type LimitAccount,
   type LimitPoolWindow,
@@ -150,7 +149,7 @@ function PoolWindowCard({
               <View
                 key={member.account.key}
                 className="h-7 min-w-0"
-                style={{ flex: planWeight(member.account) }}
+                style={{ flex: member.weight }}
               />
             );
           const { account, window } = member;
@@ -163,7 +162,7 @@ function PoolWindowCard({
               accessibilityHint="Show account details"
               onPress={() => openAccount(account)}
               className="h-7 min-w-0 rounded-md bg-subtle"
-              style={{ flex: planWeight(account) }}
+              style={{ flex: member.weight }}
             >
               <View className="absolute inset-0 overflow-hidden rounded-md">
                 <AccountSegment

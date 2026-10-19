@@ -12,7 +12,6 @@ import {
   type LimitPoolMember,
   type LimitPoolWindow,
   paceRemainingPercent,
-  planWeight,
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
 import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
@@ -479,7 +478,7 @@ function PoolBar({
         className="grid gap-x-1 gap-y-1"
         style={{
           gridTemplateColumns: pool.columns
-            .map((member) => `minmax(0, ${planWeight(member.account)}fr)`)
+            .map((member) => `minmax(0, ${member.weight}fr)`)
             .join(" "),
         }}
       >

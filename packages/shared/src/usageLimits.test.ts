@@ -1017,49 +1017,188 @@ describe("pooled account columns", () => {
     expect(pool!.windows[1]!.resets.map((reset) => reset.restoresPercent)).toEqual([40, 20]);
   });
 
-  it("weights pooled quota by plan multiplier", () => {
+  it("weights Codex quota, timed pace, refills and columns by supported plan capacity", () => {
+    const codex = (
+      key: string,
+      plan: string | undefined,
+      windows: LimitAccount["limits"]["windows"],
+    ) => ({
+      ...account(key, windows),
+      driver: ProviderDriverKind.make("codex"),
+      plan,
+    });
+    const pro20 = "ChatGPT Pro 20x Subscription";
+    const pro5 = "ChatGPT Pro 5x Subscription";
+    const plus = "ChatGPT Plus Subscription";
+    const [pool] = collectLimitPools(
+      [
+        codex("a", pro20, [{ ...weekly, id: "secondary", usedPercent: 100 }]),
+        codex("b", pro5, [{ ...weekly, id: "secondary", usedPercent: 82 }]),
+      ],
+      now,
+    );
+    expect
+      .soft(pool!.windows[0])
+      .toMatchObject({ remainingPercent: 4, usedPercent: 96, pace: "on" });
+    expect.soft(pool!.windows[0]!.resets.map((reset) => reset.restoresPercent)).toEqual([80, 16]);
+    expect.soft(pool!.windows[0]!.columns).toMatchObject([{ weight: 20 }, { weight: 5 }]);
+
+    const [weeklyOnly] = collectLimitPools(
+      [
+        codex("a", pro20, [{ ...weekly, id: "secondary", usedPercent: 100 }]),
+        codex("b", plus, [{ ...weekly, id: "primary", usedPercent: 0 }]),
+      ],
+      now,
+    );
+    expect.soft(weeklyOnly!.windows).toMatchObject([
+      {
+        id: "weekly",
+        remainingPercent: 5,
+        usedPercent: 95,
+        columns: [{ weight: 20 }, { weight: 1 }],
+      },
+    ]);
+
+    // The untimed Pro allowance contributes quota, but must not change the pace verdict.
+    const [session] = collectLimitPools(
+      [
+        codex("a", pro5, [{ ...window, usedPercent: 100, resetsAt: "2026-09-03T12:03:00.000Z" }]),
+        codex("b", plus, [{ ...window, usedPercent: 82, resetsAt: "2026-09-03T13:30:00.000Z" }]),
+        codex("c", pro20, [{ ...window, usedPercent: 0, resetsAt: undefined }]),
+        codex("d", pro5, []),
+        codex("e", undefined, []),
+      ],
+      now,
+    )[0]!.windows;
+    expect.soft(session).toMatchObject({ remainingPercent: 78, usedPercent: 22, pace: "on" });
+    expect.soft(session!.resets.map((reset) => reset.restoresPercent)).toEqual([19, 3]);
+    expect.soft(session!.columns).toMatchObject([
+      { account: { key: "a" }, weight: 5 },
+      { account: { key: "b" }, weight: 1 },
+      { account: { key: "c" }, weight: 20 },
+      { account: { key: "d" }, window: null, weight: 5 },
+      { account: { key: "e" }, window: null, weight: 1 },
+    ]);
+  });
+
+  it("weights only Claude sessions and retains partial refills behind a weekly block", () => {
     const [pool] = collectLimitPools(
       [
         {
-          ...account("a", [{ ...weekly, id: "secondary", usedPercent: 100 }]),
-          driver: ProviderDriverKind.make("codex"),
-          plan: "ChatGPT Pro 20x Subscription",
+          ...account("a", [
+            { ...window, usedPercent: 40, resetsAt: "2026-09-03T15:00:00.000Z" },
+            { ...weekly, usedPercent: 100 },
+            { ...weekly, id: "seven_day_fable", usedPercent: 80 },
+          ]),
+          plan: "Claude Max 20x Subscription",
         },
         {
-          ...account("b", [{ ...weekly, id: "secondary", usedPercent: 82 }]),
-          driver: ProviderDriverKind.make("codex"),
-          plan: "ChatGPT Pro 5x Subscription",
+          ...account("b", [
+            { ...window, usedPercent: 20, resetsAt: "2026-09-03T13:00:00.000Z" },
+            { ...weekly, usedPercent: 20 },
+            { ...weekly, id: "seven_day_fable", usedPercent: 20 },
+          ]),
+          plan: "Claude Max 5x Subscription",
+        },
+        {
+          ...account("c", [window, { ...weekly, usedPercent: 40 }]),
+          plan: "Claude Pro Subscription",
         },
       ],
       now,
     );
-    // 20 parts empty, 5 parts with 18% left: 0.9 of 25 parts.
-    // Both windows are 99% elapsed: 96% used is on pace, where an even 91% would read under.
-    expect(pool!.windows[0]).toMatchObject({ remainingPercent: 4, usedPercent: 96, pace: "on" });
-    expect(pool!.windows[0]!.resets.map((reset) => reset.restoresPercent)).toEqual([80, 16]);
-    const [zero] = collectLimitPools(
-      [{ ...account("a", [{ ...weekly, usedPercent: 60 }]), plan: "Pro 0x" }],
-      now,
-    );
-    expect(zero!.windows[0]!.remainingPercent).toBe(40);
-    // Plus has no multiplier in its label and is the 1x baseline.
-    const [plus] = collectLimitPools(
-      [
-        {
-          ...account("a", [{ ...weekly, id: "secondary", usedPercent: 100 }]),
-          driver: ProviderDriverKind.make("codex"),
-          plan: "ChatGPT Pro 20x Subscription",
-        },
-        {
-          ...account("b", [{ ...weekly, id: "primary", usedPercent: 0 }]),
-          driver: ProviderDriverKind.make("codex"),
-          plan: "ChatGPT Plus Subscription",
-        },
-      ],
-      now,
-    );
-    expect(plus!.windows).toHaveLength(1);
-    expect(plus!.windows[0]).toMatchObject({ id: "weekly", remainingPercent: 5 });
+    const [session, allModels, model] = pool!.windows;
+    expect.soft(session).toMatchObject({ remainingPercent: 18, usedPercent: 82, pace: "under" });
+    expect
+      .soft(session!.resets.map((reset) => [reset.member.account.key, reset.restoresPercent]))
+      .toEqual([
+        ["b", 4],
+        ["a", 46],
+        ["c", 2],
+      ]);
+    expect.soft(session!.columns).toMatchObject([
+      { account: { key: "b" }, weight: 5 },
+      { account: { key: "a" }, weight: 20, refillPercent: 60, window: { usedPercent: 100 } },
+      { account: { key: "c" }, weight: 1 },
+    ]);
+    expect.soft(allModels).toMatchObject({ remainingPercent: 47, usedPercent: 53, pace: "under" });
+    expect.soft(allModels!.resets.map((reset) => reset.restoresPercent)).toEqual([7, 33, 13]);
+    expect.soft(model).toMatchObject({ remainingPercent: 50, usedPercent: 50, pace: "under" });
+    expect.soft(model!.resets.map((reset) => reset.restoresPercent)).toEqual([10, 40]);
+    expect.soft(allModels!.columns).toMatchObject([{ weight: 1 }, { weight: 1 }, { weight: 1 }]);
+    expect.soft(model!.columns).toMatchObject([
+      { account: { key: "b" }, weight: 1 },
+      { account: { key: "a" }, weight: 1 },
+      { account: { key: "c" }, window: null, weight: 1 },
+    ]);
+  });
+
+  it("falls back to equal capacity only for windows with an unknown reporting plan", () => {
+    for (const [driver, unknownPlan] of [
+      ["codex", undefined],
+      ["codex", "ChatGPT Pro 0x Subscription"],
+      ["codex", "ChatGPT Pro 7x Subscription"],
+      ["codex", "Claude Max 20x Subscription"],
+      ["claudeAgent", "Claude Subscription"],
+      ["claudeAgent", "Claude Team Subscription"],
+      ["claudeAgent", "ChatGPT Pro 20x Subscription"],
+      ["cursor", "ChatGPT Pro 20x Subscription"],
+    ] as const) {
+      const plan = driver === "claudeAgent" ? "Claude Max" : "ChatGPT Pro";
+      const known = [20, 5].map((weight, i) => ({
+        ...account(String(i), [
+          { ...window, usedPercent: i === 0 ? 100 : 82, resetsAt: "2026-09-03T12:03:00.000Z" },
+          { ...weekly, usedPercent: i === 0 ? 99 : 82 },
+        ]),
+        driver: ProviderDriverKind.make(driver),
+        plan: `${plan} ${weight}x Subscription`,
+      }));
+      const [pool] = collectLimitPools(
+        [
+          ...known,
+          {
+            ...account("unknown", [{ ...window, usedPercent: 0, resetsAt: undefined }]),
+            driver: ProviderDriverKind.make(driver),
+            plan: unknownPlan,
+          },
+        ],
+        now,
+      );
+      const [session, week] = pool!.windows;
+      const context = `${driver}: ${unknownPlan ?? "no plan"}`;
+      expect
+        .soft(session, context)
+        .toMatchObject({ remainingPercent: 39, usedPercent: 61, pace: "under" });
+      expect
+        .soft(
+          session!.resets.map((reset) => reset.restoresPercent),
+          context,
+        )
+        .toEqual([33, 27]);
+      expect
+        .soft(session!.columns, context)
+        .toMatchObject([{ weight: 1 }, { weight: 1 }, { weight: 1 }]);
+      expect
+        .soft(week, context)
+        .toMatchObject(
+          driver === "codex"
+            ? { remainingPercent: 4, usedPercent: 96, pace: "on" }
+            : { remainingPercent: 10, usedPercent: 91, pace: "under" },
+        );
+      expect
+        .soft(
+          week!.resets.map((reset) => reset.restoresPercent),
+          context,
+        )
+        .toEqual(driver === "codex" ? [79, 16] : [50, 41]);
+      expect
+        .soft(week!.columns, context)
+        .toMatchObject([
+          { weight: driver === "codex" ? 20 : 1 },
+          { weight: driver === "codex" ? 5 : 1 },
+          { account: { key: "unknown" }, window: null, weight: 1 },
+        ]);
+    }
   });
 
   it("falls back to weekly resets when no account reports a session", () => {
