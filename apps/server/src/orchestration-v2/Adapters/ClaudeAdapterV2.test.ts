@@ -13548,15 +13548,31 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           threadMessages(harness.events, member?.childThreadId).map((event) => event.message.text),
           ["Reply with exactly: A1", "A1 from the transcript"],
         );
-        // T3 may have missed the launch, so the recovered coordinator's
-        // thread is created only if it does not exist yet.
-        assert.deepEqual(
-          harness.events.flatMap((event) =>
-            event.type === "app_thread.created" && event.appThread.id === coordinator?.childThreadId
-              ? [event.createOnly]
-              : [],
+        assert.isDefined(coordinator?.childThreadId);
+        const recoveredThreads = harness.events.filter(
+          (event) =>
+            event.type === "app_thread.created" &&
+            event.appThread.id === coordinator?.childThreadId,
+        );
+        assert.lengthOf(recoveredThreads, 1);
+        const recovered = recoveredThreads[0];
+        assert.equal(recovered?.type, "app_thread.created");
+        if (recovered?.type !== "app_thread.created") throw new Error("Expected recovered thread");
+        assert.isTrue(recovered.createOnly);
+        assert.deepEqual(recovered.appThread.lineage, {
+          parentThreadId: harness.threadId,
+          relationshipToParent: "subagent",
+          rootThreadId: harness.threadId,
+        });
+        assert.equal(recovered.appThread.createdBy, "agent");
+        assert.equal(recovered.appThread.creationSource, "provider");
+        assert.isBelow(
+          harness.events.indexOf(recovered),
+          harness.events.findIndex(
+            (event) =>
+              event.type === "subagent.updated" &&
+              event.subagent.childThreadId === coordinator?.childThreadId,
           ),
-          [true],
         );
       }).pipe(
         Effect.provide(
