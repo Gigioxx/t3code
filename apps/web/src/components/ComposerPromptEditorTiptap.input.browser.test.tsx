@@ -2,6 +2,7 @@ import type { Editor } from "@tiptap/core";
 import { act, createElement, createRef, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import { serializeEditorDoc } from "~/composer-rich-text-doc";
 import {
@@ -245,6 +246,30 @@ describe("composer context undo lifetime", () => {
       },
     };
   }
+
+  it("preserves typing focus across draft switches without taking focus from another control", async () => {
+    const composer = await mountComposer("Draft B");
+    const previousEditor = composer.editor();
+    await act(async () => {
+      previousEditor.commands.setTextSelection(previousEditor.state.doc.content.size - 1);
+      previousEditor.view.focus();
+    });
+    expect(document.activeElement).toBe(previousEditor.view.dom);
+
+    await composer.render("b");
+    const nextEditor = composer.editor();
+    expect(nextEditor).not.toBe(previousEditor);
+    expect(document.activeElement).toBe(nextEditor.view.dom);
+    await act(async () => userEvent.keyboard("x"));
+    expect(composer.draft().value).toBe("xDraft B");
+
+    const button = document.createElement("button");
+    container.append(button);
+    button.focus();
+    await composer.render("a");
+    expect(document.activeElement).toBe(button);
+    expect(composer.draft().value).toBe(composer.initialValue);
+  });
 
   it("restores a deleted chip and its file bytes on same-draft undo, then releases them on unmount", async () => {
     const composer = await mountComposer();

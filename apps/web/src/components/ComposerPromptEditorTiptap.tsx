@@ -43,6 +43,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
 } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 
@@ -745,11 +746,13 @@ const ComposerMarkersExtension = Extension.create({
 type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
 
 export function ComposerPromptEditorTiptap(props: ComposerPromptEditorProps) {
+  const restoreFocusRef = useRef(false);
   // Draft switches end undo history; text mode changes require new extensions.
   return (
     <ComposerPromptEditorTiptapInner
       key={`${props.draftKey ?? ""}:${props.literalText ? "literal" : props.richTextEnabled ? "rich" : "plain"}`}
       {...props}
+      restoreFocusRef={restoreFocusRef}
     />
   );
 }
@@ -880,7 +883,9 @@ function createComposerExtensions(richText: boolean) {
 const RICH_TEXT_EXTENSIONS = createComposerExtensions(true);
 const PLAIN_TEXT_EXTENSIONS = createComposerExtensions(false);
 
-function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
+function ComposerPromptEditorTiptapInner(
+  props: ComposerPromptEditorProps & { restoreFocusRef: RefObject<boolean> },
+) {
   const {
     value,
     cursor,
@@ -909,6 +914,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     onCitationDraftSave,
     onPaste,
     editorRef,
+    restoreFocusRef,
   } = props;
   const richText = !literalText && (richTextEnabled ?? false);
   const clampEditorCursor = (text: string, position: number) =>
@@ -1579,6 +1585,19 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
     skillLabelFor,
     value,
   ]);
+
+  useLayoutEffect(() => {
+    if (!editor) return;
+    if (restoreFocusRef.current) {
+      restoreFocusRef.current = false;
+      editor.view.focus();
+      scrollTiptapCaretIntoView(editor);
+    }
+    return () => {
+      // Capture focus before the keyed editor's DOM is removed.
+      restoreFocusRef.current = editor.view.hasFocus();
+    };
+  }, [editor, restoreFocusRef]);
 
   const focusAt = (nextCursor: number) => {
     if (!editor) return;
