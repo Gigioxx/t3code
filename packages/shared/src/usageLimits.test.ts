@@ -308,7 +308,10 @@ describe("pools", () => {
         [2, 0, 1],
         [2, 1, 0],
       ]) {
-        const ordered: LimitPresentations = new Map(order.map((i) => entries[i]!));
+        const ordered = new Map<
+          EnvironmentId,
+          LimitPresentations extends ReadonlyMap<EnvironmentId, infer V> ? V : never
+        >(order.map((i) => entries[i]!));
         const merged = collectLimitAccounts(ordered);
         expect
           .soft(merged.find((a) => a.email === native.auth.email)?.plan)
