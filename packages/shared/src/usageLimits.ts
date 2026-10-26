@@ -171,8 +171,18 @@ export interface LimitAccount {
 export function collectLimitAccounts(presentations: LimitPresentations): readonly LimitAccount[] {
   const accounts = new Map<string, LimitAccount>();
   const creditSources = new Map<string, LimitAccount>();
+  const planSources = new Map<string, LimitAccount>();
   const hubRedeems = new Map<string, LimitAccount>();
   const merge = (key: string, next: LimitAccount) => {
+    // A generic Claude hub refresh must not advance an informative tier's timestamp.
+    const previousPlan = planSources.get(key);
+    if (
+      !(next.driver === "claudeAgent" && next.plan === "Claude Subscription") &&
+      (!previousPlan ||
+        Date.parse(next.limits.checkedAt) > Date.parse(previousPlan.limits.checkedAt))
+    ) {
+      planSources.set(key, next);
+    }
     // Prefer hub redemption to clear its routing cooldown too; displayed balance still follows the freshest read.
     const previousHub = hubRedeems.get(key);
     if (
@@ -208,11 +218,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
     accounts.set(key, {
       ...previous,
       displayName: previous.displayName ?? next.displayName,
-      // The hub's generic Claude label carries no tier information.
-      plan:
-        winner.driver === "claudeAgent" && winner.plan === "Claude Subscription"
-          ? ((fresher ? previous.plan : next.plan) ?? winner.plan)
-          : winner.plan,
+      plan: planSources.has(key) ? planSources.get(key)!.plan : winner.plan,
       accentColor: previous.accentColor ?? next.accentColor,
       environments,
       sourceLabel: environments.length > 0 ? null : (previous.sourceLabel ?? next.sourceLabel),
@@ -411,6 +417,8 @@ function accountSortName(account: LimitAccount): string {
 function planCapacity(account: LimitAccount, kind: ServerProviderUsageWindow["kind"]) {
   if (account.driver === "codex" && (kind === "session" || kind === "weekly")) {
     if (account.plan === "ChatGPT Plus Subscription") return 1;
+    if (account.plan === "ChatGPT Pro 100 Subscription") return 5;
+    if (account.plan === "ChatGPT Pro 200 Subscription") return 20;
     const match = account.plan?.match(/^ChatGPT Pro (5|20)x Subscription$/);
     return match ? Number(match[1]) : undefined;
   }

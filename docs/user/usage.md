@@ -87,7 +87,7 @@ the dialog.
 or Claude accounts across your enabled environments and hubs you read one number per window rather than a
 list. Each window card shows how much of the pool is left and a bar with one segment per account.
 Pooled amounts are estimates based on reported plan labels, not guaranteed quotas. Recognized
-Codex Plus, Pro 5x, and Pro 20x plans use a 1:5:20 ratio for session and weekly windows. Recognized
+Codex Plus, Pro 100, and Pro 200 plans use a 1:5:20 ratio for session and weekly windows. Recognized
 Claude Pro, Max 5x, and Max 20x plans use the same ratio for sessions; Claude weekly and
 model-specific windows count accounts equally. If any account reporting a window has an unknown
 capacity, that entire window counts accounts equally. Accounts missing a window do not affect

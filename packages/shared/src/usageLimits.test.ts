@@ -264,6 +264,55 @@ describe("pools", () => {
           .toBe("Claude Max 20x Subscription");
         expect.soft(session?.remainingPercent, context).toBe(80);
       }
+      if (nativeCheckedAt !== checkedAt) continue;
+      const changed = {
+        ...native,
+        auth: { ...native.auth, label: "Claude Max 5x Subscription" },
+        usageLimits: {
+          checkedAt: "2026-09-03T11:15:00.000Z",
+          windows: [{ ...window, usedPercent: 0 }],
+        },
+      };
+      const entries = [
+        ...reports,
+        [
+          EnvironmentId.make("env-c"),
+          {
+            ...laptop,
+            serverConfig: {
+              providers: [],
+              usageLimitSources: [
+                {
+                  ...source,
+                  accounts: [
+                    {
+                      id: "changed",
+                      driver: claude,
+                      email: native.auth.email,
+                      plan: changed.auth.label,
+                      usageLimits: changed.usageLimits,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ] as const,
+      ];
+      for (const order of [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+      ]) {
+        const merged = collectLimitAccounts(new Map(order.map((i) => entries[i]!)));
+        expect
+          .soft(merged.find((a) => a.email === native.auth.email)?.plan)
+          .toBe("Claude Max 5x Subscription");
+        expect.soft(collectLimitPools(merged, now)[0]?.windows[0]?.remainingPercent).toBe(50);
+      }
     }
   });
 
@@ -1001,7 +1050,10 @@ describe("pooled account columns", () => {
     expect(pool!.windows[1]!.resets.map((reset) => reset.restoresPercent)).toEqual([40, 20]);
   });
 
-  it("weights Codex quota, timed pace, refills and columns by supported plan capacity", () => {
+  it.each([
+    ["ChatGPT Pro 20x Subscription", "ChatGPT Pro 5x Subscription"],
+    ["ChatGPT Pro 200 Subscription", "ChatGPT Pro 100 Subscription"],
+  ])("weights Codex quota, timed pace, refills and columns for %s", (pro20, pro5) => {
     const codex = (
       key: string,
       plan: string | undefined,
@@ -1011,8 +1063,6 @@ describe("pooled account columns", () => {
       driver: ProviderDriverKind.make("codex"),
       plan,
     });
-    const pro20 = "ChatGPT Pro 20x Subscription";
-    const pro5 = "ChatGPT Pro 5x Subscription";
     const plus = "ChatGPT Plus Subscription";
     const [pool] = collectLimitPools(
       [
