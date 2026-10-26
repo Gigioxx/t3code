@@ -7,6 +7,8 @@ const encodeString = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 let captureSequence = 0;
 const captureLocks = new WeakMap<Electron.WebContents, Semaphore.Semaphore>();
 
+export const resetPreviewCapture = (wc: Electron.WebContents) => captureLocks.delete(wc);
+
 // Chromium rasterizes CSS-scaled guests at their displayed size, including CDP screenshots.
 // Freeze only that preview while capturing unscaled pixels; never change its viewport.
 export const withUnscaledPreviewCapture = <A, E, R>(
@@ -21,9 +23,12 @@ export const withUnscaledPreviewCapture = <A, E, R>(
     lock = Semaphore.makeUnsafe(1);
     captureLocks.set(wc, lock);
   }
+  // A pending native relay capture must keep its queue slot to prevent overlapping Chromium copies.
+  const nativeCapture =
+    unscaledCaptureTimeoutMs === undefined ? Effect.uninterruptible : Effect.interruptible;
   const unscaledCapture =
     unscaledCaptureTimeoutMs === undefined
-      ? capture
+      ? nativeCapture(capture)
       : capture.pipe(Effect.timeout(unscaledCaptureTimeoutMs));
   return lock
     .withPermit(
@@ -42,7 +47,7 @@ export const withUnscaledPreviewCapture = <A, E, R>(
           Effect.orElseSucceed(() => false),
         );
         if (scaled !== true) return yield* unscaledCapture;
-        const frozen = yield* Effect.tryPromise((_signal) => wc.capturePage());
+        const frozen = yield* nativeCapture(Effect.tryPromise((_signal) => wc.capturePage()));
         const token = `preview-capture-${++captureSequence}`;
         // The renderer checks delayed IPC expiry outside the Effect runtime.
         const deadline = (yield* Clock.Clock.defaultValue().currentTimeMillis) + 5_000;
@@ -91,7 +96,7 @@ export const withUnscaledPreviewCapture = <A, E, R>(
             if (!active) throw new Error("Preview capture expired");
           })()`),
         ).pipe(
-          Effect.andThen(capture),
+          Effect.andThen(nativeCapture(capture)),
           Effect.ensuring(
             Effect.suspend(() =>
               host.isDestroyed()
@@ -115,7 +120,7 @@ export const withUnscaledPreviewCapture = <A, E, R>(
       }),
     )
     .pipe(
-      // Bound queueing and overlay setup as well as both scaled captures.
+      // Bound setup and queueing; native relay copies retain their queue slot until settled.
       Effect.timeout("5 seconds"),
     );
 };
