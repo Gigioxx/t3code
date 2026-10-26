@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   type LimitAccount,
+  type LimitPresentations,
   collectProviderUsageLimits,
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
@@ -307,7 +308,8 @@ describe("pools", () => {
         [2, 0, 1],
         [2, 1, 0],
       ]) {
-        const merged = collectLimitAccounts(new Map(order.map((i) => entries[i]!)));
+        const ordered: LimitPresentations = new Map(order.map((i) => entries[i]!));
+        const merged = collectLimitAccounts(ordered);
         expect
           .soft(merged.find((a) => a.email === native.auth.email)?.plan)
           .toBe("Claude Max 5x Subscription");
