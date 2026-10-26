@@ -11,13 +11,21 @@ export const resetPreviewCapture = (wc: Electron.WebContents) => captureLocks.de
 
 // Chromium rasterizes CSS-scaled guests at their displayed size, including CDP screenshots.
 // Freeze only that preview while capturing unscaled pixels; never change its viewport.
-export const withUnscaledPreviewCapture = <A, E, R>(
+export const withUnscaledPreviewCapture = Effect.fn("PreviewCapture.withUnscaledPreviewCapture")(<
+  A,
+  E,
+  R,
+>(
   tabId: string,
   wc: Electron.WebContents,
   capture: Effect.Effect<A, E, R>,
   tabAttribute: "data-preview-tab" | "data-preview-server-tab" = "data-preview-tab",
   unscaledCaptureTimeoutMs?: number,
+  current: () => boolean = () => true,
 ) => {
+  const requireCurrent = Effect.try(() => {
+    if (!current()) throw new Error("The page this screenshot was for has moved on.");
+  });
   let lock = captureLocks.get(wc);
   if (!lock) {
     lock = Semaphore.makeUnsafe(1);
@@ -47,7 +55,9 @@ export const withUnscaledPreviewCapture = <A, E, R>(
           Effect.orElseSucceed(() => false),
         );
         if (scaled !== true) return yield* unscaledCapture;
+        yield* requireCurrent;
         const frozen = yield* nativeCapture(Effect.tryPromise((_signal) => wc.capturePage()));
+        yield* requireCurrent;
         const token = `preview-capture-${++captureSequence}`;
         // The renderer checks delayed IPC expiry outside the Effect runtime.
         const deadline = (yield* Clock.Clock.defaultValue().currentTimeMillis) + 5_000;
@@ -123,7 +133,7 @@ export const withUnscaledPreviewCapture = <A, E, R>(
       // Bound setup and queueing; native relay copies retain their queue slot until settled.
       Effect.timeout("5 seconds"),
     );
-};
+});
 
 export const capturePreviewPage = (tabId: string, wc: Electron.WebContents) =>
   withUnscaledPreviewCapture(

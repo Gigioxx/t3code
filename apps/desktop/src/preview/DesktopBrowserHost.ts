@@ -346,6 +346,8 @@ export const make = Effect.gen(function* () {
                       webContents,
                       Effect.tryPromise(sendCurrent),
                       "data-preview-server-tab",
+                      undefined,
+                      current,
                     ),
                   ).catch((error: unknown) => {
                     throw Cause.isUnknownError(error) ? error.cause : error;
