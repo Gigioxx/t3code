@@ -7,6 +7,7 @@ import {
   type ModelSelection,
   type RuntimeMode,
   type OrchestrationV2ThreadShell,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -27,6 +28,7 @@ import * as ServerSettings from "../../../serverSettings.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -52,6 +54,28 @@ const clientLaunchHarness = (input: {
   const projectDefaults: { model: ModelSelection | null } = {
     model: input.overrideModel === undefined ? modelSelection : null,
   };
+  // The registry's providers, which a test can change between launches.
+  const providers: Array<ServerProvider> = [
+    {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      enabled: true,
+      status: "ready",
+      models: [{ slug: "claude-opus", name: "Claude Opus" }],
+    } as never,
+    {
+      instanceId: ProviderInstanceId.make("codex"),
+      enabled: true,
+      status: "ready",
+      models: [{ slug: "gpt-settings", name: "GPT Settings" }],
+    } as never,
+    // A provider that has not listed its models yet accepts any slug.
+    {
+      instanceId: ProviderInstanceId.make("opencode"),
+      enabled: true,
+      status: "ready",
+      models: [],
+    } as never,
+  ];
   const layerDependencies = Layer.mergeAll(
     ServerSettings.layerTest({
       ...(input.defaultRuntimeMode === undefined
@@ -127,6 +151,9 @@ const clientLaunchHarness = (input: {
         ),
     }),
     Layer.mock(PeerForwarding.PeerForwarding)({}),
+    Layer.mock(ProviderRegistry.ProviderRegistry)({
+      getProviders: Effect.sync(() => providers),
+    }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer)),
   ).pipe(
@@ -139,11 +166,11 @@ const clientLaunchHarness = (input: {
     ),
     Layer.provideMerge(NodeServices.layer),
   );
-  return { projectId, modelSelection, projectDefaults, dependencies: layerDependencies };
+  return { projectId, modelSelection, projectDefaults, providers, dependencies: layerDependencies };
 };
 
 it.effect(
-  "a client launches with the project's default model and mode, capped at its ceiling",
+  "a client launches with the project's default model and mode, capped at its ceiling, or a model its provider advertises",
   () =>
     Effect.gen(function* () {
       const launchWith = Effect.fn("test.launchWith")(function* (
@@ -155,6 +182,7 @@ it.effect(
           readonly runtimeMode?: RuntimeMode;
           readonly targeted?: false;
           readonly overrideModel?: ModelSelection;
+          readonly modelSelection?: ModelSelection;
         },
       ) {
         const { targeted, overrideModel, ...input } = params;
@@ -221,6 +249,36 @@ it.effect(
         overrideModel,
       });
       expect(fromSettings.launched[0]?.modelSelection).toEqual(overrideModel);
+
+      const advertised = yield* launchWith("full-access", "full-access", {
+        title: "Fix",
+        modelSelection: overrideModel,
+      });
+      expect(advertised.launched[0]?.modelSelection).toEqual(overrideModel);
+
+      const unadvertised = yield* launchWith("full-access", "full-access", {
+        title: "Fix",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "gpt-6-astra",
+        },
+      });
+      expect(unadvertised.result).toMatchObject({ code: "model_unavailable" });
+      expect(unadvertised.launched).toHaveLength(0);
+
+      const unregistered = yield* launchWith("full-access", "full-access", {
+        title: "Fix",
+        modelSelection: { instanceId: ProviderInstanceId.make("missing"), model: "claude-opus" },
+      });
+      expect(unregistered.result).toMatchObject({ code: "provider_unavailable" });
+      expect(unregistered.launched).toHaveLength(0);
+
+      const unlisted = { instanceId: ProviderInstanceId.make("opencode"), model: "any-model" };
+      const fromUnlisted = yield* launchWith("full-access", "full-access", {
+        title: "Fix",
+        modelSelection: unlisted,
+      });
+      expect(fromUnlisted.launched[0]?.modelSelection).toEqual(unlisted);
     }),
 );
 
@@ -291,13 +349,14 @@ it.effect("a launch key of any length or content gives a short id and never a de
   }),
 );
 
-it.effect("a retried launch replays after the project loses its default model", () =>
+it.effect("a retried launch replays after its project or provider drops the model", () =>
   Effect.gen(function* () {
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
-    const { projectId, modelSelection, projectDefaults, dependencies } = clientLaunchHarness({
-      runtimeModeCeiling: "auto",
-      launched,
-    });
+    const { projectId, modelSelection, projectDefaults, providers, dependencies } =
+      clientLaunchHarness({
+        runtimeModeCeiling: "auto",
+        launched,
+      });
     const toolkit = yield* ProjectToolkit.pipe(
       Effect.provide(
         McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
@@ -315,6 +374,20 @@ it.effect("a retried launch replays after the project loses its default model", 
       launched[0]?.threadId,
       launched[0]?.threadId,
     ]);
+
+    // An accepted launch replays even once its provider no longer lists the model.
+    const requested = toolkit
+      .handle("t3_thread_launch", {
+        title: "Fix",
+        projectId,
+        clientRequestId: "fix-2",
+        modelSelection,
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    yield* requested;
+    providers.length = 0;
+    expect((yield* requested).at(-1)?.result).toMatchObject({ projectId, modelSelection });
+    expect(launched[3]?.threadId).toBe(launched[2]?.threadId);
   }),
 );
 

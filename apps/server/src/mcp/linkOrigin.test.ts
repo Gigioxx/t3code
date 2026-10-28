@@ -122,7 +122,16 @@ const layerTools = Layer.mergeAll(
   Layer.provide(layerLaunches),
   Layer.provide(NodeCrypto.layer),
   Layer.provide(
-    Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+    Layer.mock(ProviderRegistry.ProviderRegistry)({
+      getProviders: Effect.succeed([
+        {
+          instanceId,
+          enabled: true,
+          status: "ready",
+          models: [{ slug: "gpt-5", name: "GPT-5" }],
+        } as never,
+      ]),
+    }),
   ),
   Layer.provide(
     Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({

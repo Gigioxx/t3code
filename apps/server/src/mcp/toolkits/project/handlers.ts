@@ -15,6 +15,7 @@ import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageInt
 import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -133,6 +134,25 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
         const launchedModel =
           launched === null || launched.deletedAt !== null ? undefined : launched.modelSelection;
         const replaying = launchedModel !== undefined;
+        if (!replaying && input.modelSelection !== undefined) {
+          const { instanceId, model } = input.modelSelection;
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          const providers = yield* registry.getProviders;
+          const provider = providers.find((candidate) => candidate.instanceId === instanceId);
+          if (provider === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "provider_unavailable",
+              message: `Provider instance ${instanceId} is not registered. No thread was created.`,
+            });
+          if (
+            provider.models.length > 0 &&
+            !provider.models.some((candidate) => candidate.slug === model)
+          )
+            return yield* new OrchestratorMcpFailure({
+              code: "model_unavailable",
+              message: `Model ${model} is not advertised by provider ${instanceId}. No thread was created. orchestrator_capabilities lists each provider's models.`,
+            });
+        }
         if (!replaying && input.workspaceStrategy?.type === "existing_worktree") {
           const project = yield* readProject;
           if (project === undefined)
